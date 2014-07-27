@@ -21,9 +21,9 @@ dataDirectory <- '/home/wacax/Wacax/Kaggle/Liberty Mutual Group/Data/'
 #############################
 #Load Data
 #Input Data
-rows2read <- 200000
-train <- read.csv(paste0(dataDirectory, 'train.csv'), header = TRUE, stringsAsFactors = FALSE, nrows = rows2read)
-test <- read.csv(paste0(dataDirectory, 'test.csv'), header = TRUE, stringsAsFactors = FALSE, nrows = rows2read)
+rows2read <- 'all'
+train <- read.csv(paste0(dataDirectory, 'train.csv'), header = TRUE, stringsAsFactors = FALSE, nrows = ifelse(class(rows2read) == 'character', -1, rows2read))
+test <- read.csv(paste0(dataDirectory, 'test.csv'), header = TRUE, stringsAsFactors = FALSE, nrows = ifelse(class(rows2read) == 'character' -1, rows2read))
 
 submissionTemplate <- read.csv(paste0(dataDirectory, 'sampleSubmission.csv'), header = TRUE, stringsAsFactors = FALSE)
 
@@ -67,7 +67,7 @@ coef(linearBestModels,10)
 #Fire damage regression
 whichFire <- which(train$target > 0)
 linearBestModels <- regsubsets(target ~ ., data = train[intersect(noNAIndices, whichFire), c(seq(2, 19), seq(21,302))], 
-                               method = 'forward', nvmax=200, really.big=TRUE)
+                               method = 'forward', nvmax=100, really.big=TRUE)
 bestMods <- summary(linearBestModels)
 names(bestMods)
 plot(bestMods$cp, xlab="Number of Variables", ylab="Cp")
@@ -76,6 +76,31 @@ points(bestNumberOfPredictors, bestMods$cp[bestNumberOfPredictors],pch=20,col="r
 
 plot(linearBestModels,scale="Cp") #warning it cannot plot properly
 coef(linearBestModels,10)
+
+#regsubsets predict method
+predict.regsubsets=function(object,newdata,id,...){
+  form=as.formula(object$call[[2]])
+  mat=model.matrix(form,newdata)
+  coefi=coef(object,id=id)
+  mat[,names(coefi)]%*%coefi
+}
+
+#10-fold cross-validation
+set.seed(101)
+folds <- sample(rep(seq(1, 10), length=length(noNAIndices)))
+table(folds)
+cv.errors <- matrix(NA, 10, 11)
+for(k in 1:10){
+  bestFit <- regsubsets(target ~ ., data = train[noNAIndices[folds!=k], c(seq(2, 19), seq(21,302))],
+                        method = 'forward', nvmax=11, really.big=TRUE)
+  for(i in 1:11){
+    pred <- predict(bestFit, train[noNAIndices[folds==k], c(seq(2, 19), seq(21,302))], id = i)
+    cv.errors[k,i] <- mean((train$target[noNAIndices[folds==k]] - pred)^2)
+  }
+}
+rmse.cv=sqrt(apply(cv.errors,2,mean))
+plot(rmse.cv,pch=19,type="b")
+
 
 #Clustering
 #Kmeans (2 groups), The idea is to see if kmeans clustering can help explore the 
