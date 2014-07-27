@@ -1,5 +1,5 @@
 #Liberty Mutual Group - Fire Peril Loss Cost
-#ver 0.1
+#ver 0.2
 
 #########################
 #Init
@@ -21,7 +21,7 @@ dataDirectory <- '/home/wacax/Wacax/Kaggle/Liberty Mutual Group/Data/'
 #############################
 #Load Data
 #Input Data
-rows2read <- 20000
+rows2read <- 200000
 train <- read.csv(paste0(dataDirectory, 'train.csv'), header = TRUE, stringsAsFactors = FALSE, nrows = rows2read)
 test <- read.csv(paste0(dataDirectory, 'test.csv'), header = TRUE, stringsAsFactors = FALSE, nrows = rows2read)
 
@@ -52,6 +52,7 @@ ggplot(data = fireCosts, aes(x = log(Cost))) +  geom_density()
 noNAIndices <- which(apply(is.na(train), 1, sum) == 0)
 
 #Predictors Selection
+#Fire or not
 linearBestModels <- regsubsets(fire ~ ., data = train[noNAIndices, c(seq(3, 19), seq(21,303))], method = 'forward', 
                                nvmax=200, really.big=TRUE)
 bestMods <- summary(linearBestModels)
@@ -60,7 +61,20 @@ plot(bestMods$cp, xlab="Number of Variables", ylab="Cp")
 bestNumberOfPredictors <- which.min(bestMods$cp)
 points(bestNumberOfPredictors, bestMods$cp[bestNumberOfPredictors],pch=20,col="red")
 
-plot(linearBestModels,scale="Cp") #it cannot plot properly
+plot(linearBestModels,scale="Cp") #warning it cannot plot properly
+coef(linearBestModels,10)
+
+#Fire damage regression
+whichFire <- which(train$target > 0)
+linearBestModels <- regsubsets(target ~ ., data = train[intersect(noNAIndices, whichFire), c(seq(2, 19), seq(21,302))], 
+                               method = 'forward', nvmax=200, really.big=TRUE)
+bestMods <- summary(linearBestModels)
+names(bestMods)
+plot(bestMods$cp, xlab="Number of Variables", ylab="Cp")
+bestNumberOfPredictors <- which.min(bestMods$cp)
+points(bestNumberOfPredictors, bestMods$cp[bestNumberOfPredictors],pch=20,col="red")
+
+plot(linearBestModels,scale="Cp") #warning it cannot plot properly
 coef(linearBestModels,10)
 
 #Clustering
