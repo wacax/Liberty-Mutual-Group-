@@ -9,6 +9,7 @@ rm(list=ls(all=TRUE))
 require('ggplot2')
 require('leaps')
 require('gbm')
+require('RVowpalWabbit')
 
 #Set Working Directory
 workingDirectory <- "/home/wacax/Wacax/Kaggle/Liberty Mutual Group/Liberty Mutual Group - Fire Peril Loss Cost"
@@ -60,10 +61,10 @@ bestMods <- summary(linearBestModels)
 names(bestMods)
 bestNumberOfPredictors <- which.min(bestMods$cp)
 #ggplot of optimal number of predictors
-ErrorsFireClasif <- as.data.frame(bestMods$cp); names(ErrorsFireClasif) <- 'CP Error'
-ggplot(data = ErrorsFireClasif, aes(x = seq(1:201), y = CP)) +  geom_line() +  geom_point()
+ErrorsFireClasif <- as.data.frame(bestMods$cp); names(ErrorsFireClasif) <- 'CPError'
+ggplot(data = ErrorsFireClasif, aes(x = seq(1, 201), y = CPError)) +  geom_line() +  geom_point()
 #Regular plot of optimal number of predictors
-plot(bestMods$cp, xlab="Number of Variables", ylab="Cp")
+plot(bestMods$cp, xlab="Number of Variables", ylab="CP Error")
 points(bestNumberOfPredictors, bestMods$cp[bestNumberOfPredictors],pch=20,col="red")
 
 plot(linearBestModels,scale="Cp") #warning it cannot plot properly
@@ -71,9 +72,12 @@ coef(linearBestModels,10)
 
 #Extract the name of the most predictive columns
 predictors1 <- as.data.frame(bestMods$which)
-predictors1 <- sort(apply(predictors1, 2, sum), decreasing = TRUE)
-predictors1 <- names(predictors1[2:bestNumberOfPredictors + 1])
-predictors1 <- intersect(names(train), predictors1)   #Better match for predictors and names
+repeatedNames <- sapply(names(predictors1)[2:82], function(stringX){
+  return(substr(stringX, 1, 4))
+})
+originalPredictorNames <- c(names(predictors1)[1], repeatedNames, names(predictors1)[83:length(names(predictors1))])
+predictors1 <- sort(apply(predictors1, 2, sum), decreasing = TRUE, index.return = TRUE)
+predictors1 <- unique(originalPredictorNames[predictors1$ix[2:bestNumberOfPredictors]])
 
 #Fire damage regression
 whichFire <- which(train$target > 0)
@@ -89,9 +93,13 @@ plot(linearBestModels,scale="Cp") #warning it cannot plot properly
 coef(linearBestModels,10)
 
 #Extract the name of the most predictive columns
-predictors2 <- as.data.frame(bestMods$which)
-predictors2 <- sort(apply(predictors2, 2, sum), decreasing = TRUE)
-predictors2 <- names(predictors2[2:bestNumberOfPredictors + 1])
+predictorsRegression <- as.data.frame(bestMods$which)
+repeatedNames <- sapply(names(predictorsRegression)[2:82], function(stringX){
+  return(substr(stringX, 1, 4))
+})
+originalPredictorNames <- c(names(predictorsRegression)[1], repeatedNames, names(predictorsRegression)[83:length(names(predictorsRegression))])
+predictorsRegression <- sort(apply(predictorsRegression, 2, sum), decreasing = TRUE, index.return = TRUE)
+predictorsRegression <- unique(originalPredictorNames[predictorsRegression$ix[2:bestNumberOfPredictors]])
 
 #Create a predict Regsubsets Method
 predict.regsubsets <- function(object,newdata,id,...){
@@ -133,9 +141,13 @@ plot(linearBestModels,scale="Cp") #warning it cannot plot properly
 coef(linearBestModels,10)
 
 #Extract the name of the most predictive columns
-predictorsAll <- as.data.frame(bestMods$which)
-predictorsAll <- sort(apply(predictorsAll, 2, sum), decreasing = TRUE)
-predictorsAll <- names(predictorsAll[2:bestNumberOfPredictors + 1])
+predictorsAllData <- as.data.frame(bestMods$which)
+repeatedNames <- sapply(names(predictorsAllData)[2:82], function(stringX){
+  return(substr(stringX, 1, 4))
+})
+originalPredictorNames <- c(names(predictorsAllData)[1], repeatedNames, names(predictorsAllData)[83:length(names(predictorsAllData))])
+predictorsAllData <- sort(apply(predictorsAllData, 2, sum), decreasing = TRUE, index.return = TRUE)
+predictorsAllData <- unique(originalPredictorNames[predictorsAllData$ix[2:bestNumberOfPredictors]])
 
 #10-fold cross-validation
 set.seed(101)
@@ -170,19 +182,33 @@ derp <- princomp(train[noNAIndices, c('fire', 'weatherVar32', 'weatherVar33')])
 GBMModel <- gbm.fit(x = train[ , predictors1], y = ifelse(train$target > 0, 1, 0), 
                     n.trees = 1000, interaction.depth = 4, verbose = TRUE)
 
+#GLM 
+#Cross-Validaton
+
+#Final Model
+GLMModel <- glm(fire ~ ., data = train[ , c(predictors1, 'fire')], family = 'binomial')
+
 #VOWPAL WABBIT
 
 
 
 ##########################################################
-#PREDICTION
+#PREDICTIONS
+#GBM
 GBMPrediction <- predict(GBMModel, newdata = test[ , predictors1], n.trees = 1000, type = 'response')
+#GLM
+#this removes the "factor var4 has new levels A1, Z" error
+GLMModel$xlevels[['var4']] <- union(GLMModel$xlevels[['var4']], levels(test$var4))
+#prediction
+GLMPrediction <- predict(GLMModel, newdata = test[ , predictors1], type = 'response')
 
 #Values Regression
+#GBM
 fireDamageAverage <- mean(train$target[train$target > 0])
 fireIndices <- sort(GBMPrediction, decreasing = TRUE, index.return = TRUE)
 GBMPrediction[fireIndices$ix[1:floor(length(GBMPrediction) * 0.03)]] <- fireDamageAverage
 GBMPrediction[-fireIndices$ix[1:floor(length(GBMPrediction) * 0.03)]] <- 0
+#GLM
 
 #########################################################
 #Write .csv
