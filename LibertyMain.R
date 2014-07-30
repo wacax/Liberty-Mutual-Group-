@@ -9,6 +9,8 @@ rm(list=ls(all=TRUE))
 require('ggplot2')
 require('leaps')
 require('gbm')
+require('parallel')
+require('glmnet')
 require('RVowpalWabbit')
 
 #Set Working Directory
@@ -23,7 +25,7 @@ dataDirectory <- '/home/wacax/Wacax/Kaggle/Liberty Mutual Group/Data/'
 #############################
 #Load Data
 #Input Data
-rows2read <- 'all'
+rows2read <- 20000
 train <- read.csv(paste0(dataDirectory, 'train.csv'), header = TRUE, stringsAsFactors = FALSE, nrows = ifelse(class(rows2read) == 'character', -1, rows2read))
 test <- read.csv(paste0(dataDirectory, 'test.csv'), header = TRUE, stringsAsFactors = FALSE, nrows = ifelse(class(rows2read) == 'character', -1, rows2read))
 
@@ -31,12 +33,12 @@ submissionTemplate <- read.csv(paste0(dataDirectory, 'sampleSubmission.csv'), he
 
 ################################
 #Add a new column that indicates whether there was a fire or not
-train['fire'] <- ifelse(train$target > 0, 'Fire', 'NoFire')
+train['fire'] <- ifelse(train$target > 0, 1, 0)
 
 #Data Transformation
 train <- transform(train, var1 = as.factor(var1), var2 = as.factor(var2), var3 = as.factor(var3), 
                    var4 = as.factor(var4), var5 = as.factor(var5), var6 = as.factor(var6), var7 = as.factor(var7), 
-                   var8 = as.factor(var8), var9 = as.factor(var9), fire = as.factor(fire))
+                   var8 = as.factor(var8), var9 = as.factor(var9))
 test <- transform(test, var1 = as.factor(var1), var2 = as.factor(var2), var3 = as.factor(var3), 
                   var4 = as.factor(var4), var5 = as.factor(var5), var6 = as.factor(var6), var7 = as.factor(var7), 
                   var8 = as.factor(var8), var9 = as.factor(var9))
@@ -45,7 +47,7 @@ test <- transform(test, var1 = as.factor(var1), var2 = as.factor(var2), var3 = a
 #EDA
 #Plotting
 str(train)
-print(table(ifelse(train$target > 0, 1, 0)) / length(ifelse(train$target > 0, 1, 0)))
+print(table(train$fire) / length(train$fire))
 fireCosts <- as.data.frame(train$target[train$target>0]); names(fireCosts) <- 'Cost'
 ggplot(data = train, aes(x = ifelse(train$target > 0, TRUE, FALSE))) +  geom_histogram() 
 ggplot(data = fireCosts, aes(x = Cost)) +  geom_density() 
@@ -179,8 +181,11 @@ derp <- princomp(train[noNAIndices, c('fire', 'weatherVar32', 'weatherVar33')])
 #Cross-validation
 
 #Final Model
-GBMModel <- gbm.fit(x = train[ , predictors1], y = ifelse(train$target > 0, 1, 0), 
+GBMModel <- gbm.fit(x = train[ , predictors1], y = train$fire, 
                     n.trees = 1000, interaction.depth = 4, verbose = TRUE)
+summary.gbm(GBMModel)
+plot.gbm(GBMModel)
+pretty.gbm.tree(GBMModel, i.tree = 1000)
 
 #GLM 
 #Cross-Validaton
@@ -190,6 +195,22 @@ GLMModel <- glm(fire ~ ., data = train[ , c(predictors1, 'fire')], family = 'bin
 
 #VOWPAL WABBIT
 
+#import vowpal wabbit
+#?????
+#profit
+
+#GLMNET
+#Cross-validation
+#transform train Dataframe to model matrix as glmnet only accepts matrices as input
+train <- model.matrix(~ . , data = train[ , c(predictors1, 'fire')]) 
+#cross validate the data, glmnet does it automatially there is no need for the caret package or a custom CV
+GLMNETModelCV <- cv.glmnet(x = train[,1:dim(train)[2]-1], y = train[,dim(train)[2]], nfolds = 5, parallel = TRUE, family = 'binomial')
+plot(GLMNETModelCV)
+coef(GLMNETModelCV)
+
+#Final Model
+GLMNETModel <- glmnet(x = train[,1:dim(train)[2]-1], y = train[,dim(train)[2]], family = 'binomial')
+plot(GLMNETModel, xvar="lambda", label=TRUE)
 
 
 ##########################################################
