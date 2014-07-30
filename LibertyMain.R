@@ -8,8 +8,10 @@ rm(list=ls(all=TRUE))
 #Load/install required libraries
 require('ggplot2')
 require('leaps')
+require('caret')
 require('gbm')
 require('parallel')
+require('foreach')
 require('glmnet')
 require('RVowpalWabbit')
 
@@ -20,7 +22,7 @@ setwd(workingDirectory)
 dataDirectory <- '/home/wacax/Wacax/Kaggle/Liberty Mutual Group/Data/'
 
 #Load external functions
-
+source(paste0(workingDirectory, 'linearFeatureSelection.R'))
 
 #############################
 #Load Data
@@ -32,6 +34,11 @@ test <- read.csv(paste0(dataDirectory, 'test.csv'), header = TRUE, stringsAsFact
 submissionTemplate <- read.csv(paste0(dataDirectory, 'sampleSubmission.csv'), header = TRUE, stringsAsFactors = FALSE)
 
 ################################
+#DATA PREPROCESSING
+#extract gini weights
+weightsTrain <- train$var11
+weightsTest <- test$var11
+
 #Add a new column that indicates whether there was a fire or not
 train['fire'] <- ifelse(train$target > 0, 1, 0)
 
@@ -57,14 +64,14 @@ ggplot(data = fireCosts, aes(x = log(Cost))) +  geom_density()
 #NA omit, regsubsets and kmeans are sensitive to NAs
 noNAIndices <- which(apply(is.na(train), 1, sum) == 0)
 #Fire or not
-linearBestModels <- regsubsets(fire ~ ., data = train[noNAIndices, c(seq(3, 19), seq(21,303))], method = 'forward', 
-                               nvmax=200, really.big=TRUE)
+linearBestModels <- regsubsets(fire ~ ., data = train[noNAIndices, c(seq(3, 19), seq(21,303))], 
+                               method = 'forward', weights = weightsTrain[noNAIndices], nvmax=200, really.big=TRUE)
 bestMods <- summary(linearBestModels)
 names(bestMods)
 bestNumberOfPredictors <- which.min(bestMods$cp)
 #ggplot of optimal number of predictors
 ErrorsFireClasif <- as.data.frame(bestMods$cp); names(ErrorsFireClasif) <- 'CPError'
-ggplot(data = ErrorsFireClasif, aes(x = seq(1, 201), y = CPError)) +  geom_line() +  geom_point()
+ggplot(data = ErrorsFireClasif, aes(x = seq(1, nrow(ErrorsFireClasif)), y = CPError)) +  geom_line() +  geom_point()
 #Regular plot of optimal number of predictors
 plot(bestMods$cp, xlab="Number of Variables", ylab="CP Error")
 points(bestNumberOfPredictors, bestMods$cp[bestNumberOfPredictors],pch=20,col="red")
@@ -83,8 +90,8 @@ predictors1 <- unique(originalPredictorNames[predictors1$ix[2:bestNumberOfPredic
 
 #Fire damage regression
 whichFire <- which(train$target > 0)
-linearBestModels <- regsubsets(target ~ ., data = train[intersect(noNAIndices, whichFire), c(seq(2, 19), seq(21,302))], 
-                               method = 'forward', nvmax=100, really.big=TRUE)
+linearBestModels <- regsubsets(target ~ ., data = train[intersect(noNAIndices, whichFire), c(seq(2, 19), seq(21,302))],
+                               method = 'forward', weights = weightsTrain[intersect(noNAIndices, whichFire)], nvmax=100, really.big=TRUE)
 bestMods <- summary(linearBestModels)
 names(bestMods)
 plot(bestMods$cp, xlab="Number of Variables", ylab="Cp")
@@ -119,7 +126,7 @@ table(folds)
 cv.errors <- matrix(NA, 10, 11)
 for(k in 1:10){
   bestFit <- regsubsets(target ~ ., data = train[intersect(noNAIndices, whichFire)[folds!=k], c(seq(2, 19), seq(21,302))],
-                        method = 'forward', nvmax=11, really.big=TRUE)
+                        method = 'forward', weights = weightsTrain[noNAIndices[folds==k]], nvmax=11, really.big=TRUE)
   for(i in 1:11){
     pred <- predict(bestFit, train[intersect(noNAIndices, whichFire)[folds==k], c(seq(2, 19), seq(21,302))], id = i)
     cv.errors[k,i] <- mean((train$target[intersect(noNAIndices, whichFire)[folds==k]] - pred)^2)
@@ -132,7 +139,7 @@ plot(rmse.cv,pch=19,type="b")
 #Fire damage regression
 whichFire <- which(train$target > 0)
 linearBestModels <- regsubsets(target ~ ., data = train[noNAIndices, c(seq(2, 19), seq(21,302))], 
-                               method = 'forward', nvmax=100, really.big=TRUE)
+                               method = 'forward', weights = weightsTrain[noNAIndices], nvmax=100, really.big=TRUE)
 bestMods <- summary(linearBestModels)
 names(bestMods)
 plot(bestMods$cp, xlab="Number of Variables", ylab="Cp")
@@ -158,7 +165,7 @@ table(folds)
 cv.errors <- matrix(NA, 10, 25)
 for(k in 1:10){
   bestFit <- regsubsets(target ~ ., data = train[noNAIndices[folds!=k], c(seq(2, 19), seq(21,302))],
-                        method = 'forward', nvmax=25, really.big=TRUE)
+                        method = 'forward', weights = weightsTrain[noNAIndices[folds!=k]], nvmax=25, really.big=TRUE)
   for(i in 1:25){
     pred <- predict(bestFit, train[noNAIndices[folds==k], c(seq(2, 19), seq(21,302))], id = i)
     cv.errors[k,i] <- mean((train$target[noNAIndices[folds==k]] - pred)^2)
@@ -179,10 +186,27 @@ derp <- princomp(train[noNAIndices, c('fire', 'weatherVar32', 'weatherVar33')])
 #MODELLING
 #GBM
 #Cross-validation
+GBMModel <- gbm.fit(x = train[ , predictors1], y = train$fire, n.trees = 1000,
+                    interaction.depth = 4, verbose = TRUE, nTrain = floor(nrow(train) * 0.7))
+
+#Plain Regression Model for Comparison
+#without weights
+GBMModelRegression <- gbm(formula = target ~ ., data = train[ , c(predictorsAllData, 'target')],
+                          distribution = 'gaussian', n.trees = 2000, interaction.depth = 2, 
+                          verbose = TRUE, train.fraction = 0.7, cv.folds = 5, n.cores = 3)
+
+#with weights
+GBMModelRegression <- gbm(formula = target ~ ., data = train[ , c(predictorsAllData, 'target')],
+                          weights = weightsTrain, distribution = 'gaussian', n.trees = 2000, 
+                          interaction.depth = 2, verbose = TRUE, train.fraction = 0.7, cv.folds = 5, n.cores = 3)
+
+summary.gbm(GBMModelRegression)
+plot.gbm(GBMModelRegression)
+pretty.gbm.tree(GBMModelRegression, i.tree = 1000)
 
 #Final Model
 GBMModel <- gbm.fit(x = train[ , predictors1], y = train$fire, 
-                    n.trees = 1000, interaction.depth = 4, verbose = TRUE)
+                    n.trees = 2000, interaction.depth = 4, verbose = TRUE)
 summary.gbm(GBMModel)
 plot.gbm(GBMModel)
 pretty.gbm.tree(GBMModel, i.tree = 1000)
@@ -194,8 +218,7 @@ pretty.gbm.tree(GBMModel, i.tree = 1000)
 GLMModel <- glm(fire ~ ., data = train[ , c(predictors1, 'fire')], family = 'binomial')
 
 #VOWPAL WABBIT
-
-#import vowpal wabbit
+#call vowpal wabbit function
 #?????
 #profit
 
@@ -209,12 +232,17 @@ plot(GLMNETModelCV)
 coef(GLMNETModelCV)
 
 #Final Model
-GLMNETModel <- glmnet(x = train[,1:dim(train)[2]-1], y = train[,dim(train)[2]], family = 'binomial')
+#this is not recommended by the package authors, use GLMNETModelCV$glmnet.fit instead
+GLMNETModel <- glmnet(x = train[,1:dim(train)[2]-1], y = train[,dim(train)[2]], family = 'binomial', lamda = GLMNETModelCV$lambda.min) 
 plot(GLMNETModel, xvar="lambda", label=TRUE)
-
+#Recommended use
+GLMNETModel <- GLMNETModelCV$glmnet.fit
+plot(GLMNETModel, xvar="lambda", label=TRUE)
 
 ##########################################################
 #PREDICTIONS
+#plain GBM Regression
+GBMRegressionPrediction <- predict(GBMModelRegression, newdata = test[ , predictors1], n.trees = 1000)
 #GBM
 GBMPrediction <- predict(GBMModel, newdata = test[ , predictors1], n.trees = 1000, type = 'response')
 #GLM
@@ -222,6 +250,11 @@ GBMPrediction <- predict(GBMModel, newdata = test[ , predictors1], n.trees = 100
 GLMModel$xlevels[['var4']] <- union(GLMModel$xlevels[['var4']], levels(test$var4))
 #prediction
 GLMPrediction <- predict(GLMModel, newdata = test[ , predictors1], type = 'response')
+#GLMNET
+GLMNETPrediction <- rep(0, 1, nrow(test))
+test <- model.matrix(~ . , data = test[ , c('id', predictors1)])
+PredictionMatrix <- predict(GLMNETModel, newx = test[ , 2:dim(test)[2]], type = 'response')   #it needs to be fixed, since model matrix deletes data, the test matrix ends up being incomplete
+GLMNETPrediction[as.numeric(rownames(test))] <- PredictionMatrix[, match(GLMNETModelCV$lambda.min, GLMNETModel$lambda)]
 
 #Values Regression
 #GBM
@@ -230,6 +263,13 @@ fireIndices <- sort(GBMPrediction, decreasing = TRUE, index.return = TRUE)
 GBMPrediction[fireIndices$ix[1:floor(length(GBMPrediction) * 0.03)]] <- fireDamageAverage
 GBMPrediction[-fireIndices$ix[1:floor(length(GBMPrediction) * 0.03)]] <- 0
 #GLM
+
+#GLMNET
+fireDamageAverage <- mean(train$target[train$target > 0])
+fireIndices <- sort(GLMNETPrediction, decreasing = TRUE, index.return = TRUE)
+GLMNETPrediction[fireIndices$ix[1:floor(length(GLMNETPrediction) * 0.03)]] <- fireDamageAverage
+GLMNETPrediction[-fireIndices$ix[1:floor(length(GLMNETPrediction) * 0.03)]] <- 0
+
 
 #########################################################
 #Write .csv
