@@ -60,55 +60,24 @@ ggplot(data = train, aes(x = ifelse(train$target > 0, TRUE, FALSE))) +  geom_his
 ggplot(data = fireCosts, aes(x = Cost)) +  geom_density() 
 ggplot(data = fireCosts, aes(x = log(Cost))) +  geom_density() 
 
-#Predictors Selection
 #NA omit, regsubsets and kmeans are sensitive to NAs
-noNAIndices <- which(apply(is.na(train), 1, sum) == 0)
-#Fire or not
-linearBestModels <- regsubsets(fire ~ ., data = train[noNAIndices, c(seq(3, 19), seq(21,303))], 
-                               method = 'forward', weights = weightsTrain[noNAIndices], nvmax=200, really.big=TRUE)
-bestMods <- summary(linearBestModels)
-names(bestMods)
-bestNumberOfPredictors <- which.min(bestMods$cp)
-#ggplot of optimal number of predictors
-ErrorsFireClasif <- as.data.frame(bestMods$cp); names(ErrorsFireClasif) <- 'CPError'
-ggplot(data = ErrorsFireClasif, aes(x = seq(1, nrow(ErrorsFireClasif)), y = CPError)) +  geom_line() +  geom_point()
-#Regular plot of optimal number of predictors
-plot(bestMods$cp, xlab="Number of Variables", ylab="CP Error")
-points(bestNumberOfPredictors, bestMods$cp[bestNumberOfPredictors],pch=20,col="red")
+noNAIndices <- which(apply(is.na(allPredictorsData), 1, sum) == 0)
 
-plot(linearBestModels,scale="Cp") #warning it cannot plot properly
-coef(linearBestModels,10)
+#Clustering
+#Kmeans (2 groups), The idea is to see if kmeans clustering can help explore the 
+#fire vs no fire groups and if they match to some extent to the given labels
+derp <- kmeans(train[noNAIndices, c('fire', 'weatherVar32', 'weatherVar33')], 2)
 
-#Extract the name of the most predictive columns
-predictors1 <- as.data.frame(bestMods$which)
-repeatedNames <- sapply(names(predictors1)[2:82], function(stringX){
-  return(substr(stringX, 1, 4))
-})
-originalPredictorNames <- c(names(predictors1)[1], repeatedNames, names(predictors1)[83:length(names(predictors1))])
-predictors1 <- sort(apply(predictors1, 2, sum), decreasing = TRUE, index.return = TRUE)
-predictors1 <- unique(originalPredictorNames[predictors1$ix[2:bestNumberOfPredictors]])
+#PCA
+derp <- princomp(train[noNAIndices, c('fire', 'weatherVar32', 'weatherVar33')])
 
-#Fire damage regression
+#Predictors Selection
+#Linear Feature Selection
+#Fire or No-Fire Predictors
+predictors1 <- linearFeatureSelection(fire ~ ., allPredictorsData = train[, c(seq(3, 19), seq(21,303))], usersWeights = weightsTrain)
+#Fire damage regression predictor
 whichFire <- which(train$target > 0)
-linearBestModels <- regsubsets(target ~ ., data = train[intersect(noNAIndices, whichFire), c(seq(2, 19), seq(21,302))],
-                               method = 'forward', weights = weightsTrain[intersect(noNAIndices, whichFire)], nvmax=100, really.big=TRUE)
-bestMods <- summary(linearBestModels)
-names(bestMods)
-plot(bestMods$cp, xlab="Number of Variables", ylab="Cp")
-bestNumberOfPredictors <- which.min(bestMods$cp)
-points(bestNumberOfPredictors, bestMods$cp[bestNumberOfPredictors],pch=20,col="red")
-
-plot(linearBestModels,scale="Cp") #warning it cannot plot properly
-coef(linearBestModels,10)
-
-#Extract the name of the most predictive columns
-predictorsRegression <- as.data.frame(bestMods$which)
-repeatedNames <- sapply(names(predictorsRegression)[2:82], function(stringX){
-  return(substr(stringX, 1, 4))
-})
-originalPredictorNames <- c(names(predictorsRegression)[1], repeatedNames, names(predictorsRegression)[83:length(names(predictorsRegression))])
-predictorsRegression <- sort(apply(predictorsRegression, 2, sum), decreasing = TRUE, index.return = TRUE)
-predictorsRegression <- unique(originalPredictorNames[predictorsRegression$ix[2:bestNumberOfPredictors]])
+predictorsRegression <- linearFeatureSelection(target ~ ., allPredictorsData = train[whichFire, c(seq(2, 19), seq(21,302))], usersWeights = weightsTrain[whichFire], userMax = 100)
 
 #Create a predict Regsubsets Method
 predict.regsubsets <- function(object,newdata,id,...){
@@ -135,28 +104,8 @@ for(k in 1:10){
 rmse.cv=sqrt(apply(cv.errors,2,mean))
 plot(rmse.cv,pch=19,type="b")
 
-#All Data Regression
-#Fire damage regression
-whichFire <- which(train$target > 0)
-linearBestModels <- regsubsets(target ~ ., data = train[noNAIndices, c(seq(2, 19), seq(21,302))], 
-                               method = 'forward', weights = weightsTrain[noNAIndices], nvmax=100, really.big=TRUE)
-bestMods <- summary(linearBestModels)
-names(bestMods)
-plot(bestMods$cp, xlab="Number of Variables", ylab="Cp")
-bestNumberOfPredictors <- which.min(bestMods$cp)
-points(bestNumberOfPredictors, bestMods$cp[bestNumberOfPredictors],pch=20,col="red")
-
-plot(linearBestModels,scale="Cp") #warning it cannot plot properly
-coef(linearBestModels,10)
-
-#Extract the name of the most predictive columns
-predictorsAllData <- as.data.frame(bestMods$which)
-repeatedNames <- sapply(names(predictorsAllData)[2:82], function(stringX){
-  return(substr(stringX, 1, 4))
-})
-originalPredictorNames <- c(names(predictorsAllData)[1], repeatedNames, names(predictorsAllData)[83:length(names(predictorsAllData))])
-predictorsAllData <- sort(apply(predictorsAllData, 2, sum), decreasing = TRUE, index.return = TRUE)
-predictorsAllData <- unique(originalPredictorNames[predictorsAllData$ix[2:bestNumberOfPredictors]])
+#All Data Fire Damage Regression
+predictorsAllData <- linearFeatureSelection(target ~ ., allPredictorsData = train[, c(seq(2, 19), seq(21,302))], usersWeights = weightsTrain, userMax = 100)
 
 #10-fold cross-validation
 set.seed(101)
@@ -173,14 +122,6 @@ for(k in 1:10){
 }
 rmse.cv=sqrt(apply(cv.errors,2,mean))
 plot(rmse.cv,pch=19,type="b")
-
-#Clustering
-#Kmeans (2 groups), The idea is to see if kmeans clustering can help explore the 
-#fire vs no fire groups and if they match to some extent to the given labels
-derp <- kmeans(train[noNAIndices, c('fire', 'weatherVar32', 'weatherVar33')], 2)
-
-#PCA
-derp <- princomp(train[noNAIndices, c('fire', 'weatherVar32', 'weatherVar33')])
 
 ##########################################################
 #MODELLING
