@@ -16,18 +16,19 @@ require('glmnet')
 require('RVowpalWabbit')
 
 #Set Working Directory
-workingDirectory <- "/home/wacax/Wacax/Kaggle/Liberty Mutual Group/Liberty Mutual Group - Fire Peril Loss Cost"
+workingDirectory <- '/home/wacax/Wacax/Kaggle/Liberty Mutual Group/Liberty Mutual Group - Fire Peril Loss Cost/'
 setwd(workingDirectory)
 
 dataDirectory <- '/home/wacax/Wacax/Kaggle/Liberty Mutual Group/Data/'
 
 #Load external functions
 source(paste0(workingDirectory, 'linearFeatureSelection.R'))
+source(paste0(workingDirectory, 'WeightedGini.R'))
 
 #############################
 #Load Data
 #Input Data
-rows2read <- 20000
+rows2read <- 'all'
 train <- read.csv(paste0(dataDirectory, 'train.csv'), header = TRUE, stringsAsFactors = FALSE, nrows = ifelse(class(rows2read) == 'character', -1, rows2read))
 test <- read.csv(paste0(dataDirectory, 'test.csv'), header = TRUE, stringsAsFactors = FALSE, nrows = ifelse(class(rows2read) == 'character', -1, rows2read))
 
@@ -61,7 +62,7 @@ ggplot(data = fireCosts, aes(x = Cost)) +  geom_density()
 ggplot(data = fireCosts, aes(x = log(Cost))) +  geom_density() 
 
 #NA omit, regsubsets and kmeans are sensitive to NAs
-noNAIndices <- which(apply(is.na(allPredictorsData), 1, sum) == 0)
+noNAIndices <- which(apply(is.na(train), 1, sum) == 0)
 
 #Clustering
 #Kmeans (2 groups), The idea is to see if kmeans clustering can help explore the 
@@ -74,10 +75,11 @@ derp <- princomp(train[noNAIndices, c('fire', 'weatherVar32', 'weatherVar33')])
 #Predictors Selection
 #Linear Feature Selection
 #Fire or No-Fire Predictors
-predictors1 <- linearFeatureSelection(fire ~ ., allPredictorsData = train[, c(seq(3, 19), seq(21,303))], usersWeights = weightsTrain)
+predictors1 <- linearFeatureSelection(fire ~ ., allPredictorsData = train[, c(seq(3, 19), seq(21,303))])
+
 #Fire damage regression predictor
 whichFire <- which(train$target > 0)
-predictorsRegression <- linearFeatureSelection(target ~ ., allPredictorsData = train[whichFire, c(seq(2, 19), seq(21,302))], usersWeights = weightsTrain[whichFire], userMax = 100)
+predictorsRegression <- linearFeatureSelection(target ~ ., allPredictorsData = train[whichFire, c(seq(2, 19), seq(21,302))], userMax = 100)
 
 #Create a predict Regsubsets Method
 predict.regsubsets <- function(object,newdata,id,...){
@@ -105,7 +107,7 @@ rmse.cv=sqrt(apply(cv.errors,2,mean))
 plot(rmse.cv,pch=19,type="b")
 
 #All Data Fire Damage Regression
-predictorsAllData <- linearFeatureSelection(target ~ ., allPredictorsData = train[, c(seq(2, 19), seq(21,302))], usersWeights = weightsTrain, userMax = 100)
+predictorsAllData <- linearFeatureSelection(target ~ ., allPredictorsData = train[, c(seq(2, 19), seq(21,302))], userMax = 100)
 
 #10-fold cross-validation
 set.seed(101)
@@ -128,7 +130,11 @@ plot(rmse.cv,pch=19,type="b")
 #GBM
 #Cross-validation
 GBMModel <- gbm.fit(x = train[ , predictors1], y = train$fire, n.trees = 1000,
-                    interaction.depth = 4, verbose = TRUE, nTrain = floor(nrow(train) * 0.7))
+                    interaction.depth = 4, verbose = TRUE, nTrain = floor(nrow(train) * 0.7), distribution = 'bernoulli')
+#Competition Scores
+NormalizedWeightedGini <- function(solution, weights, submission) {
+  WeightedGini(solution, weights, submission) / WeightedGini(solution, weights, solution)
+}
 
 #Plain Regression Model for Comparison
 #without weights
@@ -145,9 +151,28 @@ summary.gbm(GBMModelRegression)
 plot.gbm(GBMModelRegression)
 pretty.gbm.tree(GBMModelRegression, i.tree = 1000)
 
+#Weighted Model
+GBMModel <- gbm(fire ~ ., data = train[ , c(predictors1, 'fire')],
+                n.trees = 2000, interaction.depth = 4, verbose = TRUE, 
+                weights = weightsTrain, train.fraction = 0.7, distribution = 'bernoulli', 
+                cv.folds = 5, n.cores = 3)
+summary.gbm(GBMModel)
+plot.gbm(GBMModel)
+pretty.gbm.tree(GBMModel, i.tree = 1000)
+
 #Final Model
-GBMModel <- gbm.fit(x = train[ , predictors1], y = train$fire, 
-                    n.trees = 2000, interaction.depth = 4, verbose = TRUE)
+#Fire - No Fire Model
+GBMModel <- gbm.fit(x = train[ , predictors1], y = train$fire, distribution = 'bernoulli',
+                    n.trees = 1000, interaction.depth = 4, verbose = TRUE)
+summary.gbm(GBMModel)
+plot.gbm(GBMModel)
+pretty.gbm.tree(GBMModel, i.tree = 1000)
+
+#Value Regression
+whichFire <- which(train$target > 0)
+GBMModelReg <- gbm.fit(x = train[whichFire , predictorsRegression], y = train$target[whichFire], distribution = 'gaussian',
+                       n.trees = 4000, interaction.depth = 2, verbose = TRUE, 
+                       nTrain = floor(length(whichFire) * 0.7))
 summary.gbm(GBMModel)
 plot.gbm(GBMModel)
 pretty.gbm.tree(GBMModel, i.tree = 1000)
@@ -185,7 +210,11 @@ plot(GLMNETModel, xvar="lambda", label=TRUE)
 #plain GBM Regression
 GBMRegressionPrediction <- predict(GBMModelRegression, newdata = test[ , predictors1], n.trees = 1000)
 #GBM
+#Fire-No Fire Prediction
 GBMPrediction <- predict(GBMModel, newdata = test[ , predictors1], n.trees = 1000, type = 'response')
+#Value Regression Prediction
+GBMPredictionReg <- predict(GBMModelReg, newdata = test[ , predictorsRegression], n.trees = 2800)
+
 #GLM
 #this removes the "factor var4 has new levels A1, Z" error
 GLMModel$xlevels[['var4']] <- union(GLMModel$xlevels[['var4']], levels(test$var4))
