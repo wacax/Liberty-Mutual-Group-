@@ -33,5 +33,5 @@ linearFeatureSelection <- function(uformula, allPredictorsData, userMethod = 'fo
   originalPredictorNames <- c(names(predictors1)[1], repeatedNames, names(predictors1)[83:length(names(predictors1))])
   predictors1 <- sort(apply(predictors1, 2, sum), decreasing = TRUE, index.return = TRUE)
   predictors1 <- unique(originalPredictorNames[predictors1$ix[2:bestNumberOfPredictors + 1]])
-  return(predictors1)
+  return(list(predictors1, bestNumberOfPredictors))
 }
