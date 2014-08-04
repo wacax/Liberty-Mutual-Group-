@@ -1,5 +1,5 @@
 #Liberty Mutual Group - Fire Peril Loss Cost
-#ver 0.4
+#ver 0.5
 
 #########################
 #Init
@@ -29,7 +29,7 @@ source(paste0(workingDirectory, 'WeightedGini.R'))
 #############################
 #Load Data
 #Input Data
-rows2read <- 10000
+rows2read <- 1000
 train <- read.csv(paste0(dataDirectory, 'train.csv'), header = TRUE, stringsAsFactors = FALSE, nrows = ifelse(class(rows2read) == 'character', -1, rows2read))
 test <- read.csv(paste0(dataDirectory, 'test.csv'), header = TRUE, stringsAsFactors = FALSE, nrows = ifelse(class(rows2read) == 'character', -1, rows2read))
 
@@ -164,27 +164,36 @@ NormalizedWeightedGini <- function(solution, weights, submission) {
 #Add a new column loss or not as factor
 train['lossFactor'] <- as.factor(ifelse(train$target > 0, 1, 0))
 
-GBMControl <- trainControl(method="cv",
-                           number=5,
-                           summaryFunction = twoClassSummary,
-                           verboseIter=TRUE)
+GBMControl <- trainControl(method = "cv",
+                           number = 5,
+                           verboseIter = TRUE)
 
-gbmGrid <- expand.grid(.distribution =c('bernoulli', 'adaboost'),
-                       .interaction.depth = seq(1, 7, 3),
-                       .shrinkage = c(0.001, 0.003, 0.01, 0,03, 0.1), 
+gbmGrid <- expand.grid(.interaction.depth = seq(1, 5, 2),
+                       .shrinkage = c(0.001, 0.003, 0.01), 
                        .n.trees = 1000)
 
-gbmMOD <- train(form = lossFactor ~ ., 
-                data = train[ , c(predictors1, 'lossFactor')],
-                method = "gbm",
-                tuneGrid = gbmGrid,
-                trControl = GBMControl,
-                verbose = TRUE)
+gbmMODClass <- train(form = lossFactor ~ ., 
+                     data = train[ , c(predictors1, 'lossFactor')],
+                     method = "gbm",
+                     tuneGrid = gbmGrid,
+                     trControl = GBMControl,
+                     distribution = 'bernoulli',
+                     train.fraction = 0.7,
+                     verbose = TRUE)
+
+#Best Number of trees
+GBMModel <- gbm.fit(x = train[ , predictors1], y = train$fire, distribution = 'bernoulli',
+                    interaction.depth = gbmMODClass$bestTune[2], shrinkage = gbmMODClass$bestTune[3], 
+                    n.trees = 2500, nTrain = floor(nrow(train) * 0.7),
+                    verbose = TRUE)
+
+treesClass <- gbm.perf(GBMModel,method = 'test')
 
 #Final Model
 #Fire - No Fire Model
 GBMModel <- gbm.fit(x = train[ , predictors1], y = train$fire, distribution = 'bernoulli',
-                    n.trees = 1000, verbose = TRUE)
+                    interaction.depth = gbmMODClass$bestTune[2], shrinkage = gbmMODClass$bestTune[3], 
+                    n.trees = treesClass, verbose = TRUE)
 summary.gbm(GBMModel)
 plot.gbm(GBMModel)
 pretty.gbm.tree(GBMModel, i.tree = 1000)
@@ -193,55 +202,71 @@ pretty.gbm.tree(GBMModel, i.tree = 1000)
 #5 Fold Cross-Validation + best distribution
 GBMControl <- trainControl(method="cv",
                            number=5,
-                           summaryFunction = twoClassSummary,
                            verboseIter=TRUE)
 
 gbmGrid <- expand.grid(.interaction.depth = seq(1, 7, 3),
-                       .shrinkage = c(0.001, 0.003, 0.01, 0,03, 0.1), 
+                       .shrinkage = c(0.001, 0.003, 0.01), 
                        .n.trees = 1000)
 
-gbmMOD <- train(form = target ~ ., 
-                data = train[whichFire , c(predictorsRegression, 'target')],
-                method = "gbm",
-                tuneGrid = gbmGrid,
-                trControl = GBMControl,
-                distribution = 'gaussian',
-                verbose = TRUE)
+gbmMODReg <- train(form = target ~ ., 
+                   data = train[whichFire , c(predictorsRegression, 'target')],
+                   method = "gbm",
+                   tuneGrid = gbmGrid,
+                   trControl = GBMControl,
+                   distribution = 'gaussian',
+                   train.fraction = 0.7,
+                   verbose = TRUE)
+
+#Best Number of trees
+whichFire <- which(train$target > 0)
+GBMModelReg <- gbm.fit(x = train[whichFire , predictorsRegression], y = train$target[whichFire], 
+                       distribution = 'gaussian', interaction.depth = gbmMODReg$bestTune[2], 
+                       shrinkage = gbmMODReg$bestTune[3], nTrain = floor(nrow(train) * 0.7),
+                       n.trees = 4000, verbose = TRUE)
+
+treesReg <- gbm.perf(GBMModelReg, method = 'test')
 
 #Final Model
-whichFire <- which(train$target > 0)
-GBMModelReg <- gbm.fit(x = train[whichFire , predictorsRegression], y = train$target[whichFire], distribution = 'gaussian',
-                       n.trees = 4000, verbose = TRUE)
-summary.gbm(GBMModel)
-plot.gbm(GBMModel)
-pretty.gbm.tree(GBMModel, i.tree = 1000)
+GBMModelReg <- gbm.fit(x = train[whichFire , predictorsRegression], y = train$target[whichFire], 
+                       distribution = 'gaussian', interaction.depth = gbmMODReg$bestTune[2], 
+                       shrinkage = gbmMODReg$bestTune[3], n.trees = treesReg, verbose = TRUE)
+summary.gbm(GBMModelReg)
+plot.gbm(GBMModelReg)
+pretty.gbm.tree(GBMModelReg, i.tree = 1000)
 
 #Full Data Value Regression
 #5 Fold Cross-Validation + best distribution
 GBMControl <- trainControl(method="cv",
                            number=5,
-                           summaryFunction = twoClassSummary,
                            verboseIter=TRUE)
 
 gbmGrid <- expand.grid(.interaction.depth = seq(1, 7, 3),
-                       .shrinkage = c(0.001, 0.003, 0.01, 0,03, 0.1), 
+                       .shrinkage = c(0.001, 0.003, 0.01), 
                        .n.trees = 1000)
 
-gbmMOD <- train(form = target ~ ., 
-                data = train[ , c(predictorsAllData, 'target')],
-                method = "gbm",
-                tuneGrid = gbmGrid,
-                trControl = GBMControl,
-                distribution = 'gaussian',
-                verbose = TRUE)
+gbmMODAll <- train(form = target ~ ., 
+                   data = train[ , c(predictorsAllData, 'target')],
+                   method = "gbm",
+                   tuneGrid = gbmGrid,
+                   trControl = GBMControl,
+                   distribution = 'gaussian',
+                   train.fraction = 0.7,
+                   verbose = TRUE)
+
+#Best Number of trees
+GBMModelAll <- gbm.fit(x = train[ , predictorsAllData], y = train$target, 
+                       distribution = 'gaussian', interaction.depth = gbmMODAll$bestTune[2], 
+                       shrinkage = gbmMODAll$bestTune[3], n.trees = 4000, nTrain = floor(nrow(train) * 0.7), verbose = TRUE)
+
+treesAll <- gbm.perf(GBMModelAll,method = 'test')
 
 #Final Model
-whichFire <- which(train$target > 0)
-GBMModelReg <- gbm.fit(x = train[ , predictorsAllData], y = train$target, distribution = 'gaussian',
-                       n.trees = 4000, verbose = TRUE)
-summary.gbm(GBMModel)
-plot.gbm(GBMModel)
-pretty.gbm.tree(GBMModel, i.tree = 1000)
+GBMModelAll <- gbm.fit(x = train[ , predictorsAllData], y = train$target, 
+                       distribution = 'gaussian', interaction.depth = gbmMODAll$bestTune[2],
+                       shrinkage = gbmMODAll$bestTune[3], n.trees = treesAll, verbose = TRUE)
+summary.gbm(GBMModelAll)
+plot.gbm(GBMModelAll)
+pretty.gbm.tree(GBMModelAll, i.tree = 1000)
 
 #GLM 
 #Cross-Validaton
@@ -297,14 +322,14 @@ plot(GLMNETModelReg, xvar="lambda", label=TRUE)
 
 ##########################################################
 #PREDICTIONS
-#plain GBM Regression
-GBMRegressionPrediction <- predict(GBMModelRegression, newdata = test[ , predictors1], n.trees = 1000)
 #GBM
-#Fire-No Fire Prediction
-GBMPrediction <- predict(GBMModel, newdata = test[ , predictors1], n.trees = 1000, type = 'response')
+#Loss - no Loss to Fire Prediction
+GBMPrediction <- predict(GBMModel, newdata = test[ , predictors1], n.trees = treesClass, type = 'response')
 #Value Regression Prediction
-GBMPredictionReg <- predict(GBMModelReg, newdata = test[ , predictorsRegression], n.trees = 2800)
-GBMPrediction <- GBMPrediction * GBMPredictionReg
+GBMPredictionReg <- predict(GBMModelReg, newdata = test[ , predictorsRegression], n.trees = treesReg)
+#All Data Regression Prediction
+GBMPredictionAll <- predict(GBMModelAll, newdata = test[ , predictorsAllData], n.trees = treesAll)
+
 #GLM
 #this removes the "factor var4 has new levels A1, Z" error
 GLMModel$xlevels[['var4']] <- union(GLMModel$xlevels[['var4']], levels(test$var4))
@@ -332,5 +357,5 @@ GBMPrediction[-fireIndices$ix[1:floor(length(GBMPrediction) * 0.03)]] <- 0
 
 #########################################################
 #Write .csv
-submissionTemplate$target <- GBMPrediction
-write.csv(submissionTemplate, file = "predictionTestII.csv", row.names = FALSE)
+submissionTemplate$target <- GBMPredictionAll
+write.csv(submissionTemplate, file = "predictionTestIII.csv", row.names = FALSE)
