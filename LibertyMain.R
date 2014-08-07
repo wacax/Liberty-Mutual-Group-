@@ -173,7 +173,8 @@ gbmMODClass <- train(form = lossFactor ~ .,
                      method = "gbm",
                      tuneGrid = gbmGrid,
                      trControl = GBMControl,
-                     distribution = 'bernoulli',
+                     distribution = 'adaboost',
+                     weights = weightsTrain,
                      train.fraction = 0.7,
                      verbose = TRUE)
 
@@ -206,6 +207,7 @@ gbmMODReg <- train(form = target ~ .,
                    tuneGrid = gbmGrid,
                    trControl = GBMControl,
                    distribution = 'gaussian',
+                   weights = weightsTrain[whichFire],
                    train.fraction = 0.7,
                    verbose = TRUE)
 
@@ -235,6 +237,7 @@ gbmMODAll <- train(form = target ~ .,
                    tuneGrid = gbmGrid,
                    trControl = GBMControl,
                    distribution = 'gaussian',
+                   weights = weightsTrain,
                    train.fraction = 0.7,
                    verbose = TRUE)
 
