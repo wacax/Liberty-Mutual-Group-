@@ -80,7 +80,7 @@ derp <- princomp(train[noNAIndices, c('fire', 'weatherVar32', 'weatherVar33')])
 predictors1 <- linearFeatureSelection(fire ~ ., train[, c(seq(3, 19), seq(21,303))])
 predictors1 <- predictors1[[1]]
 #Predictor selection using trees
-treeModel <- gbm(fire ~ ., train[, c(seq(3, 19), seq(21,303))], distribution = 'adaboost',
+treeModel <- gbm(fire ~ ., train[, c(seq(3, 19), seq(21,303))], distribution = 'bernoulli',
                  train.fraction = 0.7, n.trees = 1000, weights = weightsTrain)
 best.iter <- gbm.perf(treeModel, method="test")
 GBMClassPredictors <- summary(treeModel)
@@ -183,7 +183,7 @@ treesClass <- gbm.perf(gbmMODClass$finalModel, method = 'test')
 
 #Final Model
 #Fire - No Fire Model
-GBMModel <- gbm.fit(x = train[ , predictors1], y = train$fire, distribution = 'bernoulli',
+GBMModel <- gbm.fit(x = train[ , predictors1], y = train$fire, distribution = 'adaboost', weights = weightsTrain,
                     interaction.depth = gbmMODClass$bestTune[2], shrinkage = gbmMODClass$bestTune[3], 
                     n.trees = treesClass, verbose = TRUE)
 summary.gbm(GBMModel)
@@ -215,7 +215,8 @@ gbmMODReg <- train(form = target ~ .,
 treesReg <- gbm.perf(gbmMODReg$finalModel, method = 'test')
 #Final Model
 GBMModelReg <- gbm.fit(x = train[whichFire , predictorsRegression], y = train$target[whichFire], 
-                       distribution = 'gaussian', interaction.depth = gbmMODReg$bestTune[2], 
+                       distribution = 'gaussian', weights = weightsTrain[whichFire],
+                       interaction.depth = gbmMODReg$bestTune[2], 
                        shrinkage = gbmMODReg$bestTune[3], n.trees = treesReg, verbose = TRUE)
 summary.gbm(GBMModelReg)
 plot.gbm(GBMModelReg)
@@ -246,21 +247,22 @@ treesAll <- gbm.perf(gbmMODAll$finalModel, method = 'test')
 
 #Final Model
 GBMModelAll <- gbm.fit(x = train[ , predictorsAllData], y = train$target, 
-                       distribution = 'gaussian', interaction.depth = gbmMODAll$bestTune[2],
+                       distribution = 'gaussian', weights = weightsTrain,
+                       interaction.depth = gbmMODAll$bestTune[2],
                        shrinkage = gbmMODAll$bestTune[3], n.trees = treesAll, verbose = TRUE)
 summary.gbm(GBMModelAll)
 plot.gbm(GBMModelAll)
 pretty.gbm.tree(GBMModelAll, i.tree = treesAll)
 
 #Ensemble of Models
-trainGBMPred <- predict(GBMModel, newdata = train[ , predictors1], n.trees = treesClass, type = 'response')
+trainGBMClass <- predict(GBMModel, newdata = train[ , predictors1], n.trees = treesClass, type = 'response')
 trainGBMReg <- predict(GBMModelReg, newdata = train[ , predictorsRegression], n.trees = treesReg)
 trainGBMAll <- predict(GBMModelAll, newdata = train[ , predictorsAllData], n.trees = treesAll)
 
 #train responses data frame
-GBMTrainPredictionsTwoPredictors <- data.frame(trainGBMPred, trainGBMReg, train$target)
+GBMTrainPredictionsTwoPredictors <- data.frame(trainGBMClass, trainGBMReg, train$target)
 names(GBMTrainPredictionsTwoPredictors)[3] <- 'target'
-GBMTrainPredictionsFull <- data.frame(trainGBMPred, trainGBMReg, trainGBMAll, train$target)
+GBMTrainPredictionsFull <- data.frame(trainGBMClass, trainGBMReg, trainGBMAll, train$target)
 
 #Build Ensembles
 GBMControl <- trainControl(method="cv",
@@ -283,13 +285,13 @@ gbmMODEnsembleTwo <- train(form = target ~ .,
 #Best Number of trees
 treesEnsembleTwo <- gbm.perf(gbmMODEnsembleTwo$finalModel, method = 'test')
 
-GBMEnsembleTwo <- gbm.fit(x = GBMTrainPredictionsTwoPredictors[, c('trainGBMPred', 'trainGBMReg')],
+GBMEnsembleTwo <- gbm.fit(x = GBMTrainPredictionsTwoPredictors[, c('trainGBMClass', 'trainGBMReg')],
                           y = GBMTrainPredictionsTwoPredictors$target,
                           distribution = 'gaussian', interaction.depth = gbmMODEnsembleTwo$bestTune[2],
                           shrinkage = gbmMODEnsembleTwo$bestTune[3],
                           n.trees = treesEnsembleTwo, verbose = TRUE)
 
-GBMEnsembleFull <- gbm.fit(x = GBMTrainPredictionsFull[, c('trainGBMPred', 'trainGBMReg', 'trainGBMAll')],
+GBMEnsembleFull <- gbm.fit(x = GBMTrainPredictionsFull[, c('trainGBMClass', 'trainGBMReg', 'trainGBMAll')],
                            y = GBMTrainPredictionsFull$target, distribution = 'gaussian', 
                            interaction.depth = 1, shrinkage = 0.001, n.trees = 3000, verbose = TRUE)
 
@@ -309,9 +311,12 @@ GLMModel <- glm(fire ~ ., data = train[ , c(predictors1, 'fire')], family = 'bin
 
 #Cross-validation
 #transform train Dataframe to model matrix as glmnet only accepts matrices as input
-trainClassMatrix <- model.matrix(~ . , data = train[ , c(predictors1, 'fire')]) 
+trainClassMatrix <- model.matrix(~ . , data = train[ , c(predictors1, 'fire', 'var11')]) 
 #cross validate the data, glmnet does it automatially there is no need for the caret package or a custom CV
-GLMNETModelCV <- cv.glmnet(x = trainClassMatrix[,1:dim(trainClassMatrix)[2]-1], y = trainClassMatrix[,dim(trainClassMatrix)[2]], nfolds = 5, parallel = TRUE, family = 'binomial')
+GLMNETModelCV <- cv.glmnet(x = trainClassMatrix[,1:(dim(trainClassMatrix)[2]-2)], 
+                           y = trainClassMatrix[,dim(trainClassMatrix)[2]-1], 
+                           nfolds = 5, parallel = TRUE, family = 'binomial', 
+                           weights = trainClassMatrix[,ncol(trainClassMatrix)])
 plot(GLMNETModelCV)
 coef(GLMNETModelCV)
 
@@ -329,11 +334,14 @@ plot(GLMNETModel, xvar="lambda", label=TRUE)
 #Find regression targets
 whichFire <- which(train$target > 0)
 #transform train Dataframe to model matrix as glmnet only accepts matrices as input
-trainRegMatrix <- model.matrix(~ . , data = train[whichFire , c(predictorsRegression, 'target')]) 
+trainRegMatrix <- model.matrix(~ . , data = train[whichFire , c(predictorsRegression, 'target', 'var11')]) 
 #cross validate the data, glmnet does it automatially there is no need for the caret package or a custom CV
-GLMNETModelCVReg <- cv.glmnet(x = trainRegMatrix[,1:dim(trainRegMatrix)[2]-1], y = trainRegMatrix[,dim(trainRegMatrix)[2]], nfolds = 5, parallel = TRUE, family = 'gaussian')
-plot(GLMNETModelCV)
-coef(GLMNETModelCV)
+GLMNETModelCVReg <- cv.glmnet(x = trainRegMatrix[,1:(dim(trainRegMatrix)[2]-2)], 
+                              y = trainRegMatrix[,dim(trainRegMatrix)[2]-1], nfolds = 5,
+                              parallel = TRUE, family = 'gaussian', 
+                              weights = trainRegMatrix[,ncol(trainRegMatrix)])
+plot(GLMNETModelCVReg)
+coef(GLMNETModelCVReg)
 
 #Final Model
 #this is not recommended by the package authors, use GLMNETModelCV$glmnet.fit instead
@@ -347,9 +355,12 @@ plot(GLMNETModelReg, xvar="lambda", label=TRUE)
 #All Data
 #Cross-validation
 #transform train Dataframe to model matrix as glmnet only accepts matrices as input
-trainAllMatrix <- model.matrix(~ . , data = train[ , c(predictorsAllData, 'target')]) 
+trainAllMatrix <- model.matrix(~ . , data = train[ , c(predictorsAllData, 'target', 'var11')]) 
 #cross validate the data, glmnet does it automatially there is no need for the caret package or a custom CV
-GLMNETModelCVAll <- cv.glmnet(x = trainAllMatrix[,1:dim(trainAllMatrix)[2]-1], y = trainAllMatrix[,dim(trainAllMatrix)[2]], nfolds = 5, parallel = TRUE, family = 'gaussian')
+GLMNETModelCVAll <- cv.glmnet(x = trainAllMatrix[,1:(dim(trainAllMatrix)[2]-2)],
+                              y = trainAllMatrix[,dim(trainAllMatrix)[2]-1], nfolds = 5,
+                              parallel = TRUE, family = 'gaussian', 
+                              weights = trainClassMatrix[,ncol(trainClassMatrix)])
 plot(GLMNETModelCVAll)
 coef(GLMNETModelCVAll)
 
