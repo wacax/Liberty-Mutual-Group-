@@ -80,8 +80,8 @@ derp <- princomp(train[noNAIndices, c('fire', 'weatherVar32', 'weatherVar33')])
 predictors1 <- linearFeatureSelection(fire ~ ., train[, c(seq(3, 19), seq(21,303))])
 predictors1 <- predictors1[[1]]
 #Predictor selection using trees
-treeModel <- gbm(fire ~ ., train[, c(seq(3, 19), seq(21,303))], distribution = 'bernoulli',
-                 train.fraction = 0.7, n.trees = 1000, weights = weightsTrain)
+treeModel <- gbm(fire ~ ., train[, c(seq(3, 19), seq(21,303))], distribution = 'adaboost',
+                 train.fraction = 0.7, n.trees = 1000, weights = weightsTrain, verbose = TRUE)
 best.iter <- gbm.perf(treeModel, method="test")
 GBMClassPredictors <- summary(treeModel)
 GBMClassPredictors <- as.character(GBMClassPredictors$var[GBMClassPredictors$rel.inf > 1])
@@ -94,11 +94,11 @@ predictorsRegression <- linearFeatureSelection(target ~ ., train[whichFire, c(se
 predictorsRegression <- predictorsRegression[[1]]
 #Predictor selection using trees
 treeModel <- gbm(target ~ ., train[whichFire, c(seq(2, 19), seq(21,302))], distribution = 'gaussian', 
-                 train.fraction = 0.7, n.trees = 1000, weights = weightsTrain[whichFire])
+                 train.fraction = 0.7, n.trees = 1000, weights = weightsTrain[whichFire], verbose = TRUE)
 best.iter <- gbm.perf(treeModel, method="test")
-GBMGregPredictors <- summary(treeModel)
-GBMGregPredictors <- as.character(GBMGregPredictors$var[GBMGregPredictors$rel.inf > 1])
-predictorsRegression <- union(predictorsRegression, GBMGregPredictors)
+GBMRegPredictors <- summary(treeModel)
+GBMRegPredictors <- as.character(GBMRegPredictors$var[GBMRegPredictors$rel.inf > 1])
+predictorsRegression <- union(predictorsRegression, GBMRegPredictors)
                      
 #Create a predict Regsubsets Method
 predict.regsubsets <- function(object,newdata,id,...){
@@ -131,7 +131,7 @@ predictorsAllData <- linearFeatureSelection(target ~ ., train[, c(seq(2, 19), se
 predictorsAllData <- predictorsAllData[[1]]
 #Predictor selection using trees
 treeModel <- gbm(target ~ ., train[, c(seq(2, 19), seq(21,302))], distribution = 'gaussian', 
-                 train.fraction = 0.7, n.trees = 1000, weights = weightsTrain)
+                 train.fraction = 0.7, n.trees = 150, weights = weightsTrain, verbose = TRUE)
 best.iter <- gbm.perf(treeModel, method="test")
 GBMAllPredictors <- summary(treeModel)
 GBMAllPredictors <- as.character(GBMAllPredictors$var[GBMAllPredictors$rel.inf > 1])
@@ -166,7 +166,7 @@ GBMControl <- trainControl(method = "cv",
 
 gbmGrid <- expand.grid(.interaction.depth = seq(1, 5, 2),
                        .shrinkage = c(0.001, 0.003, 0.01), 
-                       .n.trees = 2500)
+                       .n.trees = 5000)
 
 gbmMODClass <- train(form = lossFactor ~ ., 
                      data = train[ , c(predictors1, 'lossFactor')],
@@ -180,12 +180,29 @@ gbmMODClass <- train(form = lossFactor ~ .,
 
 #Best Number of trees
 treesClass <- gbm.perf(gbmMODClass$finalModel, method = 'test')
+treesIterated <- max(gbmGrid$.n.trees)
+gbmMODClassExpanded <- gbmMODClass$finalModel
+
+while(treesClass >= treesIterated - 20){
+  # do another 5000 iterations  
+  gbmMODClassExpanded <- gbm.more(gbmMODClassExpanded, max(gbmGrid$.n.trees),
+                                  data = train[ , c(predictors1, 'lossFactor')],
+                                  weights = weightsTrain,
+                                  verbose=TRUE)
+  treesClass <- gbm.perf(gbmMODClassExpanded, method = 'test')
+  treesIterated <- treesIterated + max(gbmGrid$.n.trees)
+    
+  if(treesIterated >= 50000){break}  
+}
 
 #Final Model
-#Fire - No Fire Model
-GBMModel <- gbm.fit(x = train[ , predictors1], y = train$fire, distribution = 'adaboost', weights = weightsTrain,
-                    interaction.depth = gbmMODClass$bestTune[2], shrinkage = gbmMODClass$bestTune[3], 
-                    n.trees = treesClass, verbose = TRUE)
+#Add a new column loss or not as factor
+train['lossFactor'] <- as.factor(ifelse(train$target > 0, 1, 0))
+#Loss - No Loss Model
+GBMModel <- gbm(lossFactor ~ ., data = train[ , c(predictors1, 'lossFactor')], distribution = 'adaboost',
+                weights = weightsTrain,
+                interaction.depth = gbmMODClass$bestTune[2], shrinkage = gbmMODClass$bestTune[3], 
+                n.trees = treesClass, verbose = TRUE, n.cores = 3)
 summary.gbm(GBMModel)
 plot.gbm(GBMModel)
 pretty.gbm.tree(GBMModel, i.tree = treesClass)
@@ -197,9 +214,9 @@ GBMControl <- trainControl(method="cv",
                            number=5,
                            verboseIter=TRUE)
 
-gbmGrid <- expand.grid(.interaction.depth = seq(1, 7, 3),
-                       .shrinkage = c(0.001, 0.003, 0.01), 
-                       .n.trees = 5000)
+gbmGrid <- expand.grid(.interaction.depth = seq(1, 16, 3),
+                       .shrinkage = c(0.001, 0.003), 
+                       .n.trees = 7000)
 
 gbmMODReg <- train(form = target ~ ., 
                    data = train[whichFire , c(predictorsRegression, 'target')],
@@ -214,10 +231,11 @@ gbmMODReg <- train(form = target ~ .,
 #Best Number of trees
 treesReg <- gbm.perf(gbmMODReg$finalModel, method = 'test')
 #Final Model
-GBMModelReg <- gbm.fit(x = train[whichFire , predictorsRegression], y = train$target[whichFire], 
-                       distribution = 'gaussian', weights = weightsTrain[whichFire],
-                       interaction.depth = gbmMODReg$bestTune[2], 
-                       shrinkage = gbmMODReg$bestTune[3], n.trees = treesReg, verbose = TRUE)
+GBMModelReg <- gbm(target ~ ., data = train[whichFire, c(predictorsRegression, 'target')],
+                   distribution = 'gaussian',
+                   weights = weightsTrain[whichFire],
+                   interaction.depth = gbmMODReg$bestTune[2], shrinkage = gbmMODReg$bestTune[3], 
+                   n.trees = treesReg, verbose = TRUE, n.cores = 3)
 summary.gbm(GBMModelReg)
 plot.gbm(GBMModelReg)
 pretty.gbm.tree(GBMModelReg, i.tree = treesReg)
@@ -307,7 +325,7 @@ GLMModel <- glm(fire ~ ., data = train[ , c(predictors1, 'fire')], family = 'bin
 #profit
 
 #GLMNET
-#Classification fire or no fire
+#Classification loss or no loss due to fire
 
 #Cross-validation
 #transform train Dataframe to model matrix as glmnet only accepts matrices as input
