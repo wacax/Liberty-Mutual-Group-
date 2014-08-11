@@ -77,7 +77,7 @@ derp <- princomp(train[noNAIndices, c('fire', 'weatherVar32', 'weatherVar33')])
 #Predictors Selection
 #Linear Feature Selection
 #Fire or No-Fire Predictors
-predictors1 <- linearFeatureSelection(fire ~ ., train[, c(seq(3, 19), seq(21,303))])
+predictors1 <- linearFeatureSelection(fire ~ ., train[, c(seq(3, 12), seq(14, 19), seq(21,303))])
 predictors1 <- predictors1[[1]]
 #Predictor selection using trees
 treeModel <- gbm(fire ~ ., train[, c(seq(3, 19), seq(21,303))], distribution = 'adaboost',
@@ -90,7 +90,7 @@ predictors1 <- union(predictors1, GBMClassPredictors)
 #Fire damage regression predictor
 whichFire <- which(train$target > 0)
 noNAIndices <- intersect(noNAIndices, whichFire)
-predictorsRegression <- linearFeatureSelection(target ~ ., train[whichFire, c(seq(2, 19), seq(21,302))], userMax = 100)
+predictorsRegression <- linearFeatureSelection(target ~ ., train[whichFire, c(seq(3, 12), seq(14, 19), seq(21,303))], userMax = 100)
 predictorsRegression <- predictorsRegression[[1]]
 #Predictor selection using trees
 treeModel <- gbm(target ~ ., train[whichFire, c(seq(2, 19), seq(21,302))], distribution = 'gaussian', 
@@ -127,7 +127,7 @@ plot(rmse.cv,pch=19,type="b")
 
 #All Data Fire Damage Regression
 noNAIndices <- which(apply(is.na(train), 1, sum) == 0)
-predictorsAllData <- linearFeatureSelection(target ~ ., train[, c(seq(2, 19), seq(21,302))], userMax = 100)
+predictorsAllData <- linearFeatureSelection(target ~ ., train[, c(seq(3, 12), seq(14, 19), seq(21,303))], userMax = 100)
 predictorsAllData <- predictorsAllData[[1]]
 #Predictor selection using trees
 treeModel <- gbm(target ~ ., train[, c(seq(2, 19), seq(21,302))], distribution = 'gaussian', 
@@ -202,7 +202,7 @@ train['lossFactor'] <- as.factor(ifelse(train$target > 0, 1, 0))
 GBMModel <- gbm(lossFactor ~ ., data = train[ , c(predictors1, 'lossFactor')], distribution = 'adaboost',
                 weights = weightsTrain,
                 interaction.depth = gbmMODClass$bestTune[2], shrinkage = gbmMODClass$bestTune[3], 
-                n.trees = treesClass, verbose = TRUE, n.cores = 3)
+                n.trees = treesClass, verbose = TRUE)
 summary.gbm(GBMModel)
 plot.gbm(GBMModel)
 pretty.gbm.tree(GBMModel, i.tree = treesClass)
@@ -235,7 +235,7 @@ GBMModelReg <- gbm(target ~ ., data = train[whichFire, c(predictorsRegression, '
                    distribution = 'gaussian',
                    weights = weightsTrain[whichFire],
                    interaction.depth = gbmMODReg$bestTune[2], shrinkage = gbmMODReg$bestTune[3], 
-                   n.trees = treesReg, verbose = TRUE, n.cores = 3)
+                   n.trees = treesReg, verbose = TRUE)
 summary.gbm(GBMModelReg)
 plot.gbm(GBMModelReg)
 pretty.gbm.tree(GBMModelReg, i.tree = treesReg)
@@ -451,7 +451,7 @@ GBMPrediction[-fireIndices$ix[1:floor(length(GBMPrediction) * 0.03)]] <- 0
 #########################################################
 #Write .csv multiplication
 submissionTemplate$target <- GBMPredReg
-write.csv(submissionTemplate, file = "predictionI.csv", row.names = FALSE)
+write.csv(submissionTemplate, file = "predictionII.csv", row.names = FALSE)
 
 #Write .csv ensemble
 submissionTemplate$target <- ensamblePredictions
