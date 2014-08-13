@@ -25,6 +25,8 @@ dataDirectory <- '/home/wacax/Wacax/Kaggle/Liberty Mutual Group/Data/'
 #Load external functions
 source(paste0(workingDirectory, 'linearFeatureSelection.R'))
 source(paste0(workingDirectory, 'WeightedGini.R'))
+source(paste0(workingDirectory, 'csv2vw.R'))
+
 
 #############################
 #Load Data
@@ -80,8 +82,9 @@ derp <- princomp(train[noNAIndices, c('fire', 'weatherVar32', 'weatherVar33')])
 predictors1 <- linearFeatureSelection(fire ~ ., train[, c(seq(3, 12), seq(14, 19), seq(21,303))])
 predictors1 <- predictors1[[1]]
 #Predictor selection using trees
-treeModel <- gbm(fire ~ ., train[, c(seq(3, 19), seq(21,303))], distribution = 'adaboost',
-                 train.fraction = 0.7, n.trees = 1000, weights = weightsTrain, verbose = TRUE)
+treeModel <- gbm(fire ~ ., train[, c(seq(3, 12), seq(14, 19), seq(21,303))], distribution = 'adaboost',
+                 train.fraction = 0.7, n.trees = 1000, weights = weightsTrain, verbose = TRUE, 
+                 cv.folds = 3, n.cores = 3)
 best.iter <- gbm.perf(treeModel, method="test")
 GBMClassPredictors <- summary(treeModel)
 GBMClassPredictors <- as.character(GBMClassPredictors$var[GBMClassPredictors$rel.inf > 1])
@@ -90,11 +93,12 @@ predictors1 <- union(predictors1, GBMClassPredictors)
 #Fire damage regression predictor
 whichFire <- which(train$target > 0)
 noNAIndices <- intersect(noNAIndices, whichFire)
-predictorsRegression <- linearFeatureSelection(target ~ ., train[whichFire, c(seq(3, 12), seq(14, 19), seq(21,303))], userMax = 100)
+predictorsRegression <- linearFeatureSelection(target ~ ., train[whichFire, c(seq(2, 12), seq(14, 19), seq(21,302))], userMax = 100)
 predictorsRegression <- predictorsRegression[[1]]
 #Predictor selection using trees
-treeModel <- gbm(target ~ ., train[whichFire, c(seq(2, 19), seq(21,302))], distribution = 'gaussian', 
-                 train.fraction = 0.7, n.trees = 1000, weights = weightsTrain[whichFire], verbose = TRUE)
+treeModel <- gbm(target ~ ., train[whichFire, c(seq(2, 12), seq(14, 19), seq(21,302))], distribution = 'gaussian', 
+                 train.fraction = 0.7, n.trees = 1000, weights = weightsTrain[whichFire], verbose = TRUE, 
+                 cv.folds = 3, n.cores = 3)
 best.iter <- gbm.perf(treeModel, method="test")
 GBMRegPredictors <- summary(treeModel)
 GBMRegPredictors <- as.character(GBMRegPredictors$var[GBMRegPredictors$rel.inf > 1])
@@ -127,11 +131,12 @@ plot(rmse.cv,pch=19,type="b")
 
 #All Data Fire Damage Regression
 noNAIndices <- which(apply(is.na(train), 1, sum) == 0)
-predictorsAllData <- linearFeatureSelection(target ~ ., train[, c(seq(3, 12), seq(14, 19), seq(21,303))], userMax = 100)
+predictorsAllData <- linearFeatureSelection(target ~ ., train[, c(seq(2, 12), seq(14, 19), seq(21,302))], userMax = 100)
 predictorsAllData <- predictorsAllData[[1]]
 #Predictor selection using trees
-treeModel <- gbm(target ~ ., train[, c(seq(2, 19), seq(21,302))], distribution = 'gaussian', 
-                 train.fraction = 0.7, n.trees = 150, weights = weightsTrain, verbose = TRUE)
+treeModel <- gbm(target ~ ., train[, c(seq(2, 12), seq(14, 19), seq(21,302))], distribution = 'gaussian', 
+                 train.fraction = 0.7, n.trees = 1000, weights = weightsTrain, verbose = TRUE, 
+                 cv.folds = 3, n.cores = 3)
 best.iter <- gbm.perf(treeModel, method="test")
 GBMAllPredictors <- summary(treeModel)
 GBMAllPredictors <- as.character(GBMAllPredictors$var[GBMAllPredictors$rel.inf > 1])
@@ -165,8 +170,8 @@ GBMControl <- trainControl(method = "cv",
                            verboseIter = TRUE)
 
 gbmGrid <- expand.grid(.interaction.depth = seq(1, 5, 2),
-                       .shrinkage = c(0.001, 0.003, 0.01), 
-                       .n.trees = 5000)
+                       .shrinkage = c(0.001, 0.003), 
+                       .n.trees = 2500)
 
 gbmMODClass <- train(form = lossFactor ~ ., 
                      data = train[ , c(predictors1, 'lossFactor')],
@@ -216,7 +221,7 @@ GBMControl <- trainControl(method="cv",
 
 gbmGrid <- expand.grid(.interaction.depth = seq(1, 16, 3),
                        .shrinkage = c(0.001, 0.003), 
-                       .n.trees = 7000)
+                       .n.trees = 4000)
 
 gbmMODReg <- train(form = target ~ ., 
                    data = train[whichFire , c(predictorsRegression, 'target')],
@@ -313,6 +318,11 @@ GBMEnsembleFull <- gbm.fit(x = GBMTrainPredictionsFull[, c('trainGBMClass', 'tra
                            y = GBMTrainPredictionsFull$target, distribution = 'gaussian', 
                            interaction.depth = 1, shrinkage = 0.001, n.trees = 3000, verbose = TRUE)
 
+#Competition Scores GBM
+NormalizedWeightedGini <- function(solution, weights, submission) {
+  WeightedGini(solution, weights, submission) / WeightedGini(solution, weights, solution)
+}
+
 #GLM 
 #Cross-Validaton
 
@@ -390,12 +400,6 @@ coef(GLMNETModelCVAll)
 #Recommended use
 GLMNETModelAll <- GLMNETModelCVAll$glmnet.fit
 plot(GLMNETModelAll, xvar="lambda", label=TRUE)
-
-##########################################################
-#Competition Scores
-NormalizedWeightedGini <- function(solution, weights, submission) {
-  WeightedGini(solution, weights, submission) / WeightedGini(solution, weights, solution)
-}
 
 ##########################################################
 #PREDICTIONS
