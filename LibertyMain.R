@@ -1,5 +1,5 @@
 #Liberty Mutual Group - Fire Peril Loss Cost
-#ver 0.9
+#ver 0.10
 
 #########################
 #Init
@@ -40,29 +40,35 @@ submissionTemplate <- read.csv(paste0(dataDirectory, 'sampleSubmission.csv'), he
 #DATA PREPROCESSING
 #remove NAs using mean normalization
 print(paste0('There are ', length(which(apply(is.na(train), 1, sum) > 0)), ' NA rows in the data'))
-print(apply(train, 2, function(column){return(sum(is.na(column)))}))      
+colsWithNAs <- apply(train, 2, function(column){return(sum(is.na(column)))})
 #determine numeric features
-numericIdx <- which(sapply(train, class) == 'numeric')[-1]   #first column belongs to target
-means2Subtract <- colMeans(train[ , numericIdx])
+numericIdx <- names(train)[sort(intersect(union(which(sapply(train, class) == 'numeric'), 
+                                         which(sapply(train, class) == 'integer')),
+                                   which(colsWithNAs > 0)))]
+means2Subtract <- colMeans(train[ , numericIdx], na.rm = TRUE)
 
 #Center the training data and replace NAs with means
-for(i in numericIdx){
-  train[ , i] <- scale(train[ , i], center = TRUE)
-  is.na(train[ , i]) <- 0
-  print(paste0(i, 'th Column Normalized'))
+for(i in 1:length(numericIdx)){
+  naIdxs <- is.na(train[ , numericIdx[i]])
+  train[ , numericIdx[i]] <- as.numeric(train[ , numericIdx[i]] - means2Subtract[i])
+  train[naIdxs , numericIdx[i]] <- 0
+  print(paste0(numericIdx[i], ' Column Normalized'))
 }
-train['weatherVar115'] <- rep(0, nrow(train))
 
-#Center the test data and replace NAs with training data means
-for(i in numericIdx){
-  test[ , i] <- test[ , i] - means2Subtract[i]
-  is.na(test[ , i]) <- 0
-  print(paste0(i, 'th Column Normalized'))
-}
-test['weatherVar115'] <- rep(0, nrow(test))
-
-print(apply(train, 2, function(column){return(sum(is.na(column)))}))
+NAsPerColumn <- apply(train, 2, function(column){return(sum(is.na(column)))})
 print(paste0('There are ', length(which(apply(is.na(train), 2, sum) > 0)), ' NA rows after normalization'))
+
+#Center the test data and replace NAs with training data 
+for(i in 1:length(numericIdx)){
+  naIdxs <- is.na(test[ , numericIdx[i]])
+  if(sum(naIdxs == 0)){test[ , numericIdx[i]] <- as.numeric(test[ , numericIdx[i]] - means2Subtract[i])
+                       test[naIdxs , numericIdx[i]] <- 0}
+  print(paste0(numericIdx[i], ' Column Normalized'))
+}
+
+NAsPerColumn <- apply(test, 2, function(column){return(sum(is.na(column)))})
+print(paste0('There are ', length(which(apply(is.na(test), 2, sum) > 0)), ' NA rows after normalization'))
+
 
 #------------------------------------------------
 #extract gini weights
