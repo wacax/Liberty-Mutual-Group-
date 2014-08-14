@@ -1,5 +1,5 @@
 csv2vw <- function(csvFile, Label, Importance, Tag,
-                   commaSeparated = TRUE, fullTextInput = TRUE, fromConnection = FALSE){
+                   commaSeparated = TRUE, fullTextInput = TRUE, fromConnection = FALSE, outputFileDir = NULL){
   
 
 #  Features have to be in the form of:

@@ -1,5 +1,5 @@
 #Liberty Mutual Group - Fire Peril Loss Cost
-#ver 0.8
+#ver 0.9
 
 #########################
 #Init
@@ -27,7 +27,6 @@ source(paste0(workingDirectory, 'linearFeatureSelection.R'))
 source(paste0(workingDirectory, 'WeightedGini.R'))
 source(paste0(workingDirectory, 'csv2vw.R'))
 
-
 #############################
 #Load Data
 #Input Data
@@ -39,6 +38,33 @@ submissionTemplate <- read.csv(paste0(dataDirectory, 'sampleSubmission.csv'), he
 
 ################################
 #DATA PREPROCESSING
+#remove NAs using mean normalization
+print(paste0('There are ', length(which(apply(is.na(train), 1, sum) > 0)), ' NA rows in the data'))
+print(apply(train, 2, function(column){return(sum(is.na(column)))}))      
+#determine numeric features
+numericIdx <- which(sapply(train, class) == 'numeric')[-1]   #first column belongs to target
+means2Subtract <- colMeans(train[ , numericIdx])
+
+#Center the training data and replace NAs with means
+for(i in numericIdx){
+  train[ , i] <- scale(train[ , i], center = TRUE)
+  is.na(train[ , i]) <- 0
+  print(paste0(i, 'th Column Normalized'))
+}
+train['weatherVar115'] <- rep(0, nrow(train))
+
+#Center the test data and replace NAs with training data means
+for(i in numericIdx){
+  test[ , i] <- test[ , i] - means2Subtract[i]
+  is.na(test[ , i]) <- 0
+  print(paste0(i, 'th Column Normalized'))
+}
+test['weatherVar115'] <- rep(0, nrow(test))
+
+print(apply(train, 2, function(column){return(sum(is.na(column)))}))
+print(paste0('There are ', length(which(apply(is.na(train), 2, sum) > 0)), ' NA rows after normalization'))
+
+#------------------------------------------------
 #extract gini weights
 weightsTrain <- train$var11
 weightsTest <- test$var11
@@ -167,22 +193,25 @@ train['lossFactor'] <- as.factor(ifelse(train$target > 0, 1, 0))
 
 GBMControl <- trainControl(method = "cv",
                            number = 5,
-                           verboseIter = TRUE)
+                           verboseIter = TRUE,
+                           classProbs = TRUE)
 
 gbmGrid <- expand.grid(.interaction.depth = seq(1, 5, 2),
                        .shrinkage = c(0.001, 0.003), 
                        .n.trees = 2500)
 
 gbmMODClass <- train(form = lossFactor ~ ., 
-                     data = train[ , c(predictors1, 'lossFactor')],
+                     data = train[noNAIndices , c(predictors1, 'lossFactor')],
                      method = "gbm",
+                     metric = "ROC",
                      tuneGrid = gbmGrid,
                      trControl = GBMControl,
                      distribution = 'adaboost',
-                     weights = weightsTrain,
+                     weights = weightsTrain[noNAIndices],
                      train.fraction = 0.7,
                      verbose = TRUE)
 
+plot(gbmMODClass)
 #Best Number of trees
 treesClass <- gbm.perf(gbmMODClass$finalModel, method = 'test')
 treesIterated <- max(gbmGrid$.n.trees)
@@ -191,8 +220,8 @@ gbmMODClassExpanded <- gbmMODClass$finalModel
 while(treesClass >= treesIterated - 20){
   # do another 5000 iterations  
   gbmMODClassExpanded <- gbm.more(gbmMODClassExpanded, max(gbmGrid$.n.trees),
-                                  data = train[ , c(predictors1, 'lossFactor')],
-                                  weights = weightsTrain,
+                                  data = train[noNAIndices , c(predictors1, 'lossFactor')],
+                                  weights = weightsTrain[noNAIndices],
                                   verbose=TRUE)
   treesClass <- gbm.perf(gbmMODClassExpanded, method = 'test')
   treesIterated <- treesIterated + max(gbmGrid$.n.trees)
@@ -200,12 +229,14 @@ while(treesClass >= treesIterated - 20){
   if(treesIterated >= 50000){break}  
 }
 
+gbmMODClass$finalModel <- gbmMODClassExpanded
+
 #Final Model
 #Add a new column loss or not as factor
 train['lossFactor'] <- as.factor(ifelse(train$target > 0, 1, 0))
 #Loss - No Loss Model
-GBMModel <- gbm(lossFactor ~ ., data = train[ , c(predictors1, 'lossFactor')], distribution = 'adaboost',
-                weights = weightsTrain,
+GBMModel <- gbm(lossFactor ~ ., data = train[noNAIndices , c(predictors1, 'lossFactor')], distribution = 'adaboost',
+                weights = weightsTrain[noNAIndices],
                 interaction.depth = gbmMODClass$bestTune[2], shrinkage = gbmMODClass$bestTune[3], 
                 n.trees = treesClass, verbose = TRUE)
 summary.gbm(GBMModel)
@@ -256,12 +287,12 @@ gbmGrid <- expand.grid(.interaction.depth = seq(1, 7, 3),
                        .n.trees = 2500)
 
 gbmMODAll <- train(form = target ~ ., 
-                   data = train[ , c(predictorsAllData, 'target')],
+                   data = train[noNAIndices , c(predictorsAllData, 'target')],
                    method = "gbm",
                    tuneGrid = gbmGrid,
                    trControl = GBMControl,
                    distribution = 'gaussian',
-                   weights = weightsTrain,
+                   weights = weightsTrain[noNAIndices],
                    train.fraction = 0.7,
                    verbose = TRUE)
 
@@ -269,8 +300,8 @@ gbmMODAll <- train(form = target ~ .,
 treesAll <- gbm.perf(gbmMODAll$finalModel, method = 'test')
 
 #Final Model
-GBMModelAll <- gbm.fit(x = train[ , predictorsAllData], y = train$target, 
-                       distribution = 'gaussian', weights = weightsTrain,
+GBMModelAll <- gbm.fit(x = train[noNAIndices , predictorsAllData], y = train$target, 
+                       distribution = 'gaussian', weights = weightsTrain[noNAIndices],
                        interaction.depth = gbmMODAll$bestTune[2],
                        shrinkage = gbmMODAll$bestTune[3], n.trees = treesAll, verbose = TRUE)
 summary.gbm(GBMModelAll)
@@ -330,8 +361,22 @@ NormalizedWeightedGini <- function(solution, weights, submission) {
 GLMModel <- glm(fire ~ ., data = train[ , c(predictors1, 'fire')], family = 'binomial')
 
 #VOWPAL WABBIT
-#call vowpal wabbit function
+#transform csv data into vw readable data
+vwOutputDir <- paste0(dataDirectory)
+csv2vw(train, 'target', 'weight', 'Id', outputFileDir = paste0(vwOutputDir, 'trainvw.txt'))
+
 #?????
+## change to directory of data we just created
+setwd(vwOutputDir)
+
+# Test 3: without -d, training only
+# {VW} train-sets/0002.dat    -f models/0002.model
+test3 <- c("-t", "train-sets/0002.dat",
+           "-f", "models/0002.model")
+
+res <- vw(test3)
+res
+
 #profit
 
 #GLMNET
@@ -388,7 +433,7 @@ trainAllMatrix <- model.matrix(~ . , data = train[ , c(predictorsAllData, 'targe
 GLMNETModelCVAll <- cv.glmnet(x = trainAllMatrix[,1:(dim(trainAllMatrix)[2]-2)],
                               y = trainAllMatrix[,dim(trainAllMatrix)[2]-1], nfolds = 5,
                               parallel = TRUE, family = 'gaussian', 
-                              weights = trainClassMatrix[,ncol(trainClassMatrix)])
+                              weights = trainAllMatrix[, ncol(trainAllMatrix)])
 plot(GLMNETModelCVAll)
 coef(GLMNETModelCVAll)
 
@@ -405,7 +450,7 @@ plot(GLMNETModelAll, xvar="lambda", label=TRUE)
 #PREDICTIONS
 #GBM
 #Loss - no Loss to Fire Prediction
-GBMPrediction <- predict(GBMModel, newdata = test[ , predictors1], n.trees = treesClass, type = 'response')
+GBMPrediction <- predict(object = GBMModel, newdata = test[ , predictors1], n.trees = treesClass)
 #Value Regression Prediction
 GBMPredictionReg <- predict(GBMModelReg, newdata = test[ , predictorsRegression], n.trees = treesReg)
 #All Data Regression Prediction
@@ -440,7 +485,17 @@ testMatrix <- model.matrix(~ . , data = test[ , c('id', predictors1)])
 PredictionMatrix <- predict(GLMNETModel, newx = testMatrix[ , 2:dim(testMatrix)[2]], type = 'response')   #it needs to be fixed, since model matrix deletes data, the test matrix ends up being incomplete
 GLMNETPrediction[as.numeric(rownames(testMatrix))] <- PredictionMatrix[, match(GLMNETModelCV$lambda.min, GLMNETModel$lambda)]
 
-#Regresssion
+#Regression
+GLMNETPredictionReg <- rep(0, 1, nrow(test))
+testMatrixReg <- model.matrix(~ . , data = test[ , c('id', predictorsRegression)])
+PredictionMatrix <- predict(GLMNETModelReg, newx = testMatrixReg[ , 2:dim(testMatrixReg)[2]])   #it needs to be fixed, since model matrix deletes data, the test matrix ends up being incomplete
+GLMNETPredictionReg[as.numeric(rownames(testMatrixReg))] <- PredictionMatrix[, match(GLMNETModelCVReg$lambda.min, GLMNETModelCVReg$lambda)]
+
+#All Data
+GLMNETPredictionAll <- rep(0, 1, nrow(test))
+testMatrixAll <- model.matrix(~ . , data = test[ , c('id', predictorsAllData)])
+PredictionMatrix <- predict(GLMNETModelAll, newx = testMatrixAll[ , 2:dim(testMatrixAll)[2]])   #it needs to be fixed, since model matrix deletes data, the test matrix ends up being incomplete
+GLMNETPredictionAll[as.numeric(rownames(testMatrixAll))] <- PredictionMatrix[, match(GLMNETModelCVAll$lambda.min, GLMNETModelCVAll$lambda)]
 
 #Values Regression
 #GBM
