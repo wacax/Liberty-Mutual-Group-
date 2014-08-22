@@ -3,13 +3,13 @@ linearFeatureSelection <- function(uformula, allPredictorsData, userMethod = 'fo
   #Linear Feature Selection Using the Leaps Package
   #TODO: Add documentation
   #NA omit, regsubsets and kmeans are sensitive to NA 
-  noNAIndices <- which(apply(is.na(allPredictorsData), 1, sum) == 0)
+  #noNAIndices <- which(apply(is.na(allPredictorsData), 1, sum) == 0)
   
   #Fire or not
   linearBestModels <- regsubsets(x = uformula,
-                                 data = allPredictorsData[noNAIndices, ], 
+                                 data = allPredictorsData, 
                                  method = userMethod,
-                                 weights = weightsTrain[noNAIndices],
+                                 weights = weightsTrain[randomSubset],
                                  nvmax = userMax,
                                  really.big = ifelse(userMethod == 'exhaustive' & ncol(allPredictorsData) > 50, TRUE, FALSE))
   
