@@ -9,7 +9,6 @@ linearFeatureSelection <- function(uformula, allPredictorsData, userMethod = 'fo
   linearBestModels <- regsubsets(x = uformula,
                                  data = allPredictorsData, 
                                  method = userMethod,
-                                 weights = weightsTrain[randomSubset],
                                  nvmax = userMax,
                                  really.big = ifelse(userMethod == 'exhaustive' & ncol(allPredictorsData) > 50, TRUE, FALSE))
   
