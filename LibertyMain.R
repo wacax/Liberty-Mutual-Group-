@@ -6,6 +6,7 @@
 rm(list=ls(all=TRUE))
 
 #Load/install required libraries
+require('data.table')
 require('ggplot2')
 require('leaps')
 require('rpart')
@@ -111,47 +112,58 @@ derp <- princomp(train[noNAIndices, c('fire', 'weatherVar32', 'weatherVar33')])
 ###################################################
 #Predictors Selection
 #Linear Feature Selection
-randomSubset <- sample.int(nrow(train), 130000)
+noBootstrapingSapmles <- 5
+## "pre-allocate" an empty list of length 5
+linearClassPredictorsDF <- vector("list", noBootstrapingSapmles)
 #Loss or No-Loss Predictors
-linearClassPredictors <- linearFeatureSelection(fire ~ ., train[randomSubset, c(seq(3, 19), seq(21,303))])
-linearClassPredictors <- linearClassPredictors[[1]]
-#Predictor selection using trees (caret rfs function)
-randomSubset <- sample.int(nrow(train), 250000)
-GBMFeatControl <- rfeControl(functions = treebagFuncs,
-                             method = 'cv',
-                             number = 5,
-                             verbose = TRUE)
-GBMProfile <- rfe(x = train[randomSubset, c(seq(3, 19), seq(21,302))],
-                  y = train$fire[randomSubset],
-                  rfeControl = GBMFeatControl)
-
-GBMClassPredictors <- predictors(GBMProfile)
+for (i in 1:noBootstrapingSapmles){
+  randomSubset <- sample.int(nrow(train), 150000)
+  linearClassPredictors <- linearFeatureSelection(fire ~ ., train[randomSubset, c(seq(3, 19), seq(21,303))])
+  linearClassPredictorsDF[i] <- list(linearClassPredictors[[1]])[1:floor(length(linearClassPredictors[[1]]) * 0.7)]
+}
+linearClassPredictors <- character()
+for(i in 1:length(linearClassPredictorsDF)){
+  linearClassPredictors <- union(linearClassPredictors, linearClassPredictorsDF[[i]])
+}
 #Predictor selection using trees
-treeModel <- gbm.fit(x = train[randomSubset, c(seq(3, 19), seq(21,303))], y = train$fire,
-                     distribution = 'adaboost', train.fraction = 0.7, n.trees = 1000, verbose = TRUE)
-best.iter <- gbm.perf(treeModel, method="test")
+randomSubset <- sample.int(nrow(train), nrow(train)) #use this to use full data
+treeModel <- gbm.fit(x = train[randomSubset, c(seq(3, 19), seq(21,302))], y = train$fire[randomSubset],
+                     distribution = 'adaboost', nTrain = floor(nrow(train) * 0.7), n.trees = 500, verbose = TRUE)
+best.iter <- gbm.perf(treeModel, method = "test")
 GBMClassPredictors <- summary(treeModel)
 GBMClassPredictors <- as.character(GBMClassPredictors$var[GBMClassPredictors$rel.inf > 1])
 allClassPredictors <- union(linearClassPredictors, GBMClassPredictors)
 
 #Fire damage regression predictor
-whichFire <- which(train$target > 0)
-linearRegPredictors <- linearFeatureSelection(target ~ ., train[whichFire, c(seq(2, 19), seq(21,302))], userMax = 100)
+whichLoss <- which(train$target > 0)
+linearRegPredictors <- linearFeatureSelection(target ~ ., train[whichLoss, c(seq(2, 19), seq(21,302))], userMax = 100)
 linearRegPredictors <- linearRegPredictors[[1]]
 #Predictor selection using trees
-treeModel <- gbm.fit(x = train[intersection(randomSubset, whichFire), c(seq(3, 19), seq(21,303))], y = train$target,
-                     distribution = 'gaussian', train.fraction = 0.7, n.trees = 1000, verbose = TRUE)
+treeModel <- gbm.fit(x = train[whichLoss, c(seq(3, 19), seq(21,302))], y = train$target[whichLoss],
+                     distribution = 'gaussian', nTrain = floor(nrow(train) * 0.7), n.trees = 1500, verbose = TRUE)
 best.iter <- gbm.perf(treeModel, method="test")
 GBMRegPredictors <- summary(treeModel)
 GBMRegPredictors <- as.character(GBMRegPredictors$var[GBMRegPredictors$rel.inf > 1])
 allPredictorsReg <- union(linearRegPredictors, GBMRegPredictors)
 
 #All Data Fire Damage Regression
-linearPredictorsFull <- linearFeatureSelection(target ~ ., train[randomSubset, c(seq(2, 19), seq(21,302))], userMax = 100)
-linearPredictorsFull <- linearPredictorsFull[[1]]
+noBootstrapingSapmles <- 5
+## "pre-allocate" an empty list of length 5
+linearFullPredictorsDF <- vector("list", noBootstrapingSapmles)
+#Loss value regression all data
+for (i in 1:noBootstrapingSapmles){
+  randomSubset <- sample.int(nrow(train), 150000)
+  linearPredictorsFull <- linearFeatureSelection(target ~ ., train[randomSubset, c(seq(2, 19), seq(21,302))])
+  linearFullPredictorsDF[i] <- list(linearPredictorsFull[[1]])[1:floor(length(linearPredictorsFull[[1]]) * 0.7)]
+}
+linearPredictorsFull <- character()
+for(i in 1:length(linearFullPredictorsDF)){
+  linearPredictorsFull <- union(linearPredictorsFull, linearFullPredictorsDF[[i]])
+}
 #Predictor selection using trees
-treeModel <- gbm.fit(x = train[randomSubset, c(seq(3, 19), seq(21,303))], y = train$target,
-                     distribution = 'gaussian', train.fraction = 0.7, n.trees = 1000, verbose = TRUE)
+randomSubset <- sample.int(nrow(train), nrow(train)) #use this to use full data
+treeModel <- gbm.fit(x = train[randomSubset, c(seq(3, 19), seq(21,302))], y = train$target[randomSubset],
+                     distribution = 'gaussian', nTrain = floor(nrow(train) * 0.7), n.trees = 500, verbose = TRUE)
 best.iter <- gbm.perf(treeModel, method="test")
 GBMAllPredictors <- summary(treeModel)
 GBMAllPredictors <- as.character(GBMAllPredictors$var[GBMAllPredictors$rel.inf > 1])
