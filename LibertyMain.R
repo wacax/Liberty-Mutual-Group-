@@ -186,11 +186,11 @@ gbmGrid <- expand.grid(.interaction.depth = seq(1, 5, 2),
                        .shrinkage = c(0.001, 0.003), 
                        .n.trees = 500)
 
+set.seed(1001)
 randomSubset <- sample.int(nrow(train), nrow(train)) #use this to use full data
 gbmMODClass <- train(form = lossFactor ~ ., 
                      data = train[randomSubset , c(GBMClassPredictors, 'lossFactor')],
                      method = "gbm",
-                     metric = "ROC",
                      tuneGrid = gbmGrid,
                      trControl = GBMControl,
                      distribution = 'adaboost',
@@ -220,7 +220,9 @@ gbmMODClass$finalModel <- gbmMODClassExpanded
 
 #Final Model
 #Loss - No Loss Model
-GBMModel <- gbm.fit(x = train[randomSubset , GBMClassPredictors], y = train$lossFactor,
+set.seed(1002)
+randomSubset <- sample.int(nrow(train), nrow(train)) #use this to use full data
+GBMModel <- gbm.fit(x = train[randomSubset , GBMClassPredictors], y = train$lossFactor[randomSubset],
                     distribution = 'adaboost',
                     interaction.depth = gbmMODClass$bestTune[2], shrinkage = gbmMODClass$bestTune[3], 
                     n.trees = treesClass, verbose = TRUE)
@@ -237,7 +239,7 @@ GBMControl <- trainControl(method = "cv",
 
 gbmGrid <- expand.grid(.interaction.depth = seq(1, 16, 3),
                        .shrinkage = c(0.001, 0.003), 
-                       .n.trees = 4000)
+                       .n.trees = 2500)
 
 gbmMODReg <- train(form = target ~ ., 
                    data = train[whichFire , c(GBMRegPredictors, 'target')],
@@ -245,13 +247,13 @@ gbmMODReg <- train(form = target ~ .,
                    tuneGrid = gbmGrid,
                    trControl = GBMControl,
                    distribution = 'gaussian',
-                   train.fraction = 0.7,
+                   train.fraction =  0.7,
                    verbose = TRUE)
 
 #Best Number of trees
 treesReg <- gbm.perf(gbmMODReg$finalModel, method = 'test')
 #Final Model
-GBMModelReg <- gbm.fit(x = train[whichFire, GBMRegPredictors], y = train[, 'target'],
+GBMModelReg <- gbm.fit(x = train[whichFire, GBMRegPredictors], y = train[whichFire, 'target'],
                        distribution = 'gaussian',
                        interaction.depth = gbmMODReg$bestTune[2], shrinkage = gbmMODReg$bestTune[3], 
                        n.trees = treesReg, verbose = TRUE)
@@ -266,9 +268,10 @@ GBMControl <- trainControl(method = "cv",
                            verboseIter = TRUE)
 
 gbmGrid <- expand.grid(.interaction.depth = seq(1, 7, 3),
-                       .shrinkage = c(0.001, 0.003, 0.01), 
+                       .shrinkage = c(0.001, 0.003), 
                        .n.trees = 500)
 
+set.seed(1003)
 randomSubset <- sample.int(nrow(train), nrow(train)) #use this to use full data
 gbmMODAll <- train(form = target ~ ., 
                    data = train[randomSubset , c(GBMAllPredictors, 'target')],
@@ -276,13 +279,14 @@ gbmMODAll <- train(form = target ~ .,
                    tuneGrid = gbmGrid,
                    trControl = GBMControl,
                    distribution = 'gaussian',
-                   weights = weightsTrain[randomSubset],
                    train.fraction = 0.7,
                    verbose = TRUE)
 
 #Best Number of trees
 treesAll <- gbm.perf(gbmMODAll$finalModel, method = 'test')
 #Final Model
+set.seed(1004)
+randomSubset <- sample.int(nrow(train), nrow(train)) #use this to use full data
 GBMModelAll <- gbm.fit(x = train[randomSubset , GBMAllPredictors], y = train$target[randomSubset], 
                        distribution = 'gaussian', interaction.depth = gbmMODAll$bestTune[2],
                        shrinkage = gbmMODAll$bestTune[3], n.trees = treesAll, verbose = TRUE)
@@ -328,6 +332,7 @@ res
 #GLMNET
 #Classification loss or no loss due to fire
 #Cross-validation
+set.seed(1005)
 randomSubset <- sample.int(nrow(train), nrow(train)) #use this to use full data
 #transform train Dataframe to model matrix as glmnet only accepts matrices as input
 trainClassMatrix <- model.matrix(~ . , data = train[randomSubset , c(linearClassPredictors, 'lossFactor')]) 
@@ -348,6 +353,7 @@ plot(GLMNETModel, xvar="lambda", label=TRUE)
 #Find regression targets
 whichFire <- which(train$target > 0)
 #transform train Dataframe to model matrix as glmnet only accepts matrices as input
+set.seed(1006)
 trainRegMatrix <- model.matrix(~ . , data = train[whichFire , c(linearRegPredictors, 'target')]) 
 #cross validate the data, glmnet does it automatially there is no need for the caret package or a custom CV
 registerDoParallel(detectCores() - 1)
@@ -365,6 +371,7 @@ plot(GLMNETModelReg, xvar = "lambda", label=TRUE)
 #Cross-validation
 randomSubset <- sample.int(nrow(train), nrow(train)) #use this to use full data
 #transform train Dataframe to model matrix as glmnet only accepts matrices as input
+set.seed(1007)
 trainAllMatrix <- model.matrix(~ . , data = train[randomSubset , c(linearPredictorsFull, 'target')]) 
 #cross validate the data, glmnet does it automatially there is no need for the caret package or a custom CV
 registerDoParallel(detectCores() - 1)
@@ -411,6 +418,7 @@ ensembleControl <- rfeControl(functions = lmFuncs,
                               repeats = 5,
                               verbose = TRUE)
 
+set.seed(1008)
 randomSubset <- sample.int(nrow(train), nrow(train)) #use this to use full data
 ensembleFeatures <- rfe(x = trainPredictions[randomSubset, 1:12], 
                         y = trainPredictions$target[randomSubset],
@@ -427,6 +435,7 @@ ensembleGrid <- expand.grid(.interaction.depth = seq(1, 7, 3),
                             .shrinkage = c(0.001, 0.003, 0.01), 
                             .n.trees = 1000)
 
+set.seed(1009)
 randomSubset <- sample.int(nrow(train), nrow(train)) #use this to use full data
 MODEnsemble <- train(form = target ~ ., 
                      data = trainPredictions[randomSubset , c(ensembleFeatures, 'target')],
@@ -442,7 +451,7 @@ ensembleTrees <- gbm.perf(MODEnsemble$finalModel, method = 'test')
 treesIterated <- max(ensembleGrid$.n.trees)
 gbmEnsembleExpanded <- MODEnsemble$finalModel
 
-while(ensembleTrees >= treesIterated - 100){
+while(ensembleTrees >= treesIterated - 20){
   # do another 1000 iterations  
   gbmEnsembleExpanded <- gbm.more(gbmEnsembleExpanded, max(ensembleGrid$.n.trees),
                                   data = trainPredictions[randomSubset , c(ensembleFeatures, 'target')],
