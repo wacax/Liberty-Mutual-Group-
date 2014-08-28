@@ -127,12 +127,13 @@ for(i in 1:length(linearClassPredictorsDF)){
   linearClassPredictors <- union(linearClassPredictors, linearClassPredictorsDF[[i]])
 }
 #Predictor selection using trees
+set.seed(1000)
 randomSubset <- sample.int(nrow(train), nrow(train)) #use this to use full data
 treeModel <- gbm.fit(x = train[randomSubset, c(seq(3, 19), seq(21,302))], y = train$fire[randomSubset],
-                     distribution = 'adaboost', nTrain = floor(nrow(train) * 0.7), n.trees = 500, verbose = TRUE)
+                     distribution = 'bernoulli', nTrain = floor(nrow(train) * 0.7), n.trees = 500, verbose = TRUE)
 best.iter <- gbm.perf(treeModel, method = "test")
 GBMClassPredictors <- summary(treeModel)
-GBMClassPredictors <- as.character(GBMClassPredictors$var[GBMClassPredictors$rel.inf > 1])
+GBMClassPredictors <- as.character(GBMClassPredictors$var[GBMClassPredictors$rel.inf > 0.5])
 allClassPredictors <- union(linearClassPredictors, GBMClassPredictors)
 
 #Fire damage regression predictor
@@ -148,7 +149,7 @@ GBMRegPredictors <- as.character(GBMRegPredictors$var[GBMRegPredictors$rel.inf >
 allPredictorsReg <- union(linearRegPredictors, GBMRegPredictors)
 
 #All Data Fire Damage Regression
-noBootstrapingSapmles <- 5
+noBootstrapingSapmles <- 1
 ## "pre-allocate" an empty list of length 5
 linearFullPredictorsDF <- vector("list", noBootstrapingSapmles)
 #Loss value regression all data
@@ -193,7 +194,7 @@ gbmMODClass <- train(form = lossFactor ~ .,
                      method = "gbm",
                      tuneGrid = gbmGrid,
                      trControl = GBMControl,
-                     distribution = 'adaboost',
+                     distribution = 'bernoulli',
                      train.fraction = 0.7,
                      verbose = TRUE)
 
@@ -216,15 +217,14 @@ while(treesClass >= treesIterated - 20){
   if(treesIterated >= 50000){break}  
 }
 
-gbmMODClass$finalModel <- gbmMODClassExpanded
-
 #Final Model
 #Loss - No Loss Model
 set.seed(1002)
 randomSubset <- sample.int(nrow(train), nrow(train)) #use this to use full data
 GBMModel <- gbm.fit(x = train[randomSubset , GBMClassPredictors], y = train$lossFactor[randomSubset],
-                    distribution = 'adaboost',
-                    interaction.depth = gbmMODClass$bestTune[2], shrinkage = gbmMODClass$bestTune[3], 
+                    distribution = 'bernoulli',
+                    interaction.depth = as.numeric(gbmMODClass$bestTune[2]),
+                    shrinkage = as.numeric(gbmMODClass$bestTune[3]), 
                     n.trees = treesClass, verbose = TRUE)
 summary.gbm(GBMModel)
 plot.gbm(GBMModel)
@@ -253,6 +253,7 @@ gbmMODReg <- train(form = target ~ .,
 #Best Number of trees
 treesReg <- gbm.perf(gbmMODReg$finalModel, method = 'test')
 #Final Model
+whichFire <- which(train$target > 0)
 GBMModelReg <- gbm.fit(x = train[whichFire, GBMRegPredictors], y = train[whichFire, 'target'],
                        distribution = 'gaussian',
                        interaction.depth = gbmMODReg$bestTune[2], shrinkage = gbmMODReg$bestTune[3], 
@@ -284,6 +285,20 @@ gbmMODAll <- train(form = target ~ .,
 
 #Best Number of trees
 treesAll <- gbm.perf(gbmMODAll$finalModel, method = 'test')
+treesIterated <- max(gbmGrid$.n.trees)
+gbmMODAllExpanded <- gbmMODAll$finalModel
+
+while(treesAll >= treesIterated - 20){
+  # do another 5000 iterations  
+  gbmMODAllExpanded <- gbm.more(gbmMODAllExpanded, max(gbmGrid$.n.trees),
+                                  data = train[randomSubset , c(GBMAllPredictors, 'target')],
+                                  verbose=TRUE)
+  treesAll <- gbm.perf(gbmMODAllExpanded, method = 'test')
+  treesIterated <- treesIterated + max(gbmGrid$.n.trees)
+  
+  if(treesIterated >= 50000){break}  
+}
+
 #Final Model
 set.seed(1004)
 randomSubset <- sample.int(nrow(train), nrow(train)) #use this to use full data
@@ -331,11 +346,12 @@ res
 
 #GLMNET
 #Classification loss or no loss due to fire
+train['lossFactor'] <- as.factor(ifelse(train$target > 0, 1, 0))
 #Cross-validation
 set.seed(1005)
 randomSubset <- sample.int(nrow(train), nrow(train)) #use this to use full data
 #transform train Dataframe to model matrix as glmnet only accepts matrices as input
-trainClassMatrix <- model.matrix(~ . , data = train[randomSubset , c(linearClassPredictors, 'lossFactor')]) 
+trainClassMatrix <- model.matrix(~ . , data = train[randomSubset, match(c(linearClassPredictors, 'lossFactor'), names(train))])
 #cross validate the data, glmnet does it automatially there is no need for the caret package or a custom CV
 registerDoParallel(detectCores() - 1)
 GLMNETModelCV <- cv.glmnet(x = trainClassMatrix[,1:(dim(trainClassMatrix)[2]-1)], 
@@ -353,8 +369,7 @@ plot(GLMNETModel, xvar="lambda", label=TRUE)
 #Find regression targets
 whichFire <- which(train$target > 0)
 #transform train Dataframe to model matrix as glmnet only accepts matrices as input
-set.seed(1006)
-trainRegMatrix <- model.matrix(~ . , data = train[whichFire , c(linearRegPredictors, 'target')]) 
+trainRegMatrix <- model.matrix(~ . , data = train[whichFire , match(c(linearRegPredictors, 'target'), names(train))]) 
 #cross validate the data, glmnet does it automatially there is no need for the caret package or a custom CV
 registerDoParallel(detectCores() - 1)
 GLMNETModelCVReg <- cv.glmnet(x = trainRegMatrix[,1:(dim(trainRegMatrix)[2]-1)], 
@@ -369,10 +384,10 @@ plot(GLMNETModelReg, xvar = "lambda", label=TRUE)
 
 #All Data
 #Cross-validation
+set.seed(1007)
 randomSubset <- sample.int(nrow(train), nrow(train)) #use this to use full data
 #transform train Dataframe to model matrix as glmnet only accepts matrices as input
-set.seed(1007)
-trainAllMatrix <- model.matrix(~ . , data = train[randomSubset , c(linearPredictorsFull, 'target')]) 
+trainAllMatrix <- model.matrix(~ . , data = train[randomSubset , match(c(linearPredictorsFull, 'target'), names(train))]) 
 #cross validate the data, glmnet does it automatially there is no need for the caret package or a custom CV
 registerDoParallel(detectCores() - 1)
 GLMNETModelCVAll <- cv.glmnet(x = trainAllMatrix[,1:(dim(trainAllMatrix)[2]-1)],
