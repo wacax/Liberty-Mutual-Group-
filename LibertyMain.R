@@ -72,7 +72,6 @@ for(i in 1:length(numericIdx)){
 NAsPerColumn <- apply(test, 2, function(column){return(sum(is.na(column)))})
 print(paste0('There are ', length(which(apply(is.na(test), 2, sum) > 0)), ' NA rows after normalization'))
 
-
 #------------------------------------------------
 #extract gini weights
 weightsTrain <- train$var11
@@ -101,14 +100,6 @@ fireCosts <- as.data.frame(train$target[train$target>0]); names(fireCosts) <- 'C
 ggplot(data = train, aes(x = ifelse(train$target > 0, TRUE, FALSE))) +  geom_histogram() 
 ggplot(data = fireCosts, aes(x = Cost)) +  geom_density() 
 ggplot(data = fireCosts, aes(x = log(Cost))) +  geom_density() 
-
-#Clustering
-#Kmeans (2 groups), The idea is to see if kmeans clustering can help explore the 
-#fire vs no fire groups and if they match to some extent to the given labels
-derp <- kmeans(train[noNAIndices, c('fire', 'weatherVar32', 'weatherVar33')], 2)
-
-#PCA
-derp <- princomp(train[noNAIndices, c('fire', 'weatherVar32', 'weatherVar33')])
 
 ###################################################
 #Predictors Selection
@@ -220,6 +211,7 @@ while(treesClass >= treesIterated - 20){
 #Final Model
 #Loss - No Loss Model
 set.seed(1002)
+train['lossFactor'] <- ifelse(train$target > 0, 1, 0)
 randomSubset <- sample.int(nrow(train), nrow(train)) #use this to use full data
 GBMModel <- gbm.fit(x = train[randomSubset , GBMClassPredictors], y = train$lossFactor[randomSubset],
                     distribution = 'bernoulli',
@@ -356,7 +348,7 @@ trainClassMatrix <- model.matrix(~ . , data = train[randomSubset, match(c(linear
 registerDoParallel(detectCores() - 1)
 GLMNETModelCV <- cv.glmnet(x = trainClassMatrix[,1:(dim(trainClassMatrix)[2]-1)], 
                            y = trainClassMatrix[,dim(trainClassMatrix)[2]], 
-                           nfolds = 5, parallel = TRUE, family = 'binomial')
+                           nfolds = 5, parallel = TRUE, family = 'binomial', alpha = 0)
 plot(GLMNETModelCV)
 coef(GLMNETModelCV)
 rm(trainClassMatrix)
@@ -374,7 +366,7 @@ trainRegMatrix <- model.matrix(~ . , data = train[whichFire , match(c(linearRegP
 registerDoParallel(detectCores() - 1)
 GLMNETModelCVReg <- cv.glmnet(x = trainRegMatrix[,1:(dim(trainRegMatrix)[2]-1)], 
                               y = trainRegMatrix[,dim(trainRegMatrix)[2]], nfolds = 5,
-                              parallel = TRUE, family = 'gaussian')
+                              parallel = TRUE, family = 'gaussian', alpha = 0)
 plot(GLMNETModelCVReg)
 coef(GLMNETModelCVReg)
 rm(trainRegMatrix)
@@ -392,7 +384,7 @@ trainAllMatrix <- model.matrix(~ . , data = train[randomSubset , match(c(linearP
 registerDoParallel(detectCores() - 1)
 GLMNETModelCVAll <- cv.glmnet(x = trainAllMatrix[,1:(dim(trainAllMatrix)[2]-1)],
                               y = trainAllMatrix[,dim(trainAllMatrix)[2]], nfolds = 5,
-                              parallel = TRUE, family = 'gaussian')
+                              parallel = TRUE, family = 'gaussian', alpha = 0)
 plot(GLMNETModelCVAll)
 coef(GLMNETModelCVAll)
 rm(trainAllMatrix)
@@ -410,7 +402,7 @@ trainRegMatrix <- model.matrix(~ . , data = train[ , linearRegPredictors])
 trainGLMNETReg <- predict(GLMNETModelCVReg, newx = trainRegMatrix)
 rm(trainRegMatrix)
 
-trainAllMatrix <- model.matrix(~ . , data = train[ , linearPredictorsFull) 
+trainAllMatrix <- model.matrix(~ . , data = train[ , linearPredictorsFull]) 
 trainGLMNETAll <- predict(GLMNETModelCVAll, newx = trainAllMatrix)
 rm(trainAllMatrix)
 
@@ -427,74 +419,46 @@ names(GLMNETTrainPredictions) <- c('GLMNETClass', 'GLMNETReg', 'GLMNETAll', 'Cla
 
 trainPredictions <- cbind(GBMTrainPredictions, GLMNETTrainPredictions)
 
-#Feature Selection for ensemble
-ensembleControl <- rfeControl(functions = lmFuncs,
-                              method = "cv",
-                              repeats = 5,
-                              verbose = TRUE)
-
+######################################################################
+#ENSEMBLES
+#Feature Selection for ensemble (linear predictors via regsubsets)
 set.seed(1008)
-randomSubset <- sample.int(nrow(train), nrow(train)) #use this to use full data
-ensembleFeatures <- rfe(x = trainPredictions[randomSubset, 1:12], 
-                        y = trainPredictions$target[randomSubset],
-                        rfeControl = ensembleControl)
+randomSubset <- sample.int(nrow(trainPredictions), nrow(trainPredictions))
+linearBestModels <- regsubsets(target ~ ., data = trainPredictions, 
+                               method = 'forward', nvmax = 12)
+bestMods <- summary(linearBestModels)
+plot(bestMods$cp, xlab="Number of Variables", ylab="CP Error")
+points(which.min(bestMods$cp), bestMods$cp[which.min(bestMods$cp)],pch=20,col="red")
 
-ensembleFeatures <- predictor(ensembleFeatures)
+ensembleFeatures <- as.data.frame(bestMods$which)
+ensembleFeatures <- sort(apply(ensembleFeatures, 2, sum), decreasing = TRUE, index.return = TRUE)
+ensembleFeatures <- names(ensembleFeatures$x[2:which.min(bestMods$cp)])
 
-#Build Ensembles
-ensembleControl <- trainControl(method="cv",
-                                number=5,
-                                verbose = TRUE)
-
-ensembleGrid <- expand.grid(.interaction.depth = seq(1, 7, 3),
-                            .shrinkage = c(0.001, 0.003, 0.01), 
-                            .n.trees = 1000)
-
-set.seed(1009)
-randomSubset <- sample.int(nrow(train), nrow(train)) #use this to use full data
-MODEnsemble <- train(form = target ~ ., 
-                     data = trainPredictions[randomSubset , c(ensembleFeatures, 'target')],
-                     method = "gbm",
-                     tuneGrid = ensembleGrid,
-                     trControl = ensembleControl,
-                     distribution = 'gaussian',
-                     train.fraction = 0.7,
-                     verbose = TRUE)
-
-#Best Number of trees
-ensembleTrees <- gbm.perf(MODEnsemble$finalModel, method = 'test')
-treesIterated <- max(ensembleGrid$.n.trees)
-gbmEnsembleExpanded <- MODEnsemble$finalModel
-
-while(ensembleTrees >= treesIterated - 20){
-  # do another 1000 iterations  
-  gbmEnsembleExpanded <- gbm.more(gbmEnsembleExpanded, max(ensembleGrid$.n.trees),
-                                  data = trainPredictions[randomSubset , c(ensembleFeatures, 'target')],
-                                  verbose=TRUE)
-  ensembleTrees <- gbm.perf(gbmEnsembleExpanded, method = 'test')
-  treesIterated <- treesIterated + max(ensembleGrid$.n.trees)
-  
-  if(treesIterated >= 50000){break}  
-}
-
-#Full Model
-randomSubset <- sample.int(nrow(train), nrow(train)) #use this to use full data
-EnsembleModel <- gbm.fit(x = trainPredictions[randomSubset , ensembleFeatures],
-                         y = trainPredictions$target[randomSubset], distribution = 'gaussian', 
-                         interaction.depth = MODEnsemble$bestTune[2], shrinkage = MODEnsemble$bestTune[3],
-                         n.trees = ensembleTrees, verbose = TRUE)
+#GLMNET Ensemble
+#Cross-validation
+set.seed(1011)
+randomSubset <- sample.int(nrow(trainPredictions), nrow(trainPredictions)) #use this to use full data
+#transform train Dataframe to model matrix as glmnet only accepts matrices as input
+trainEnsembleMatrix <- model.matrix(~ . , data = trainPredictions[randomSubset , match(c(ensembleFeatures, 'target'), names(trainPredictions))]) 
+#cross validate the data, glmnet does it automatially there is no need for the caret package or a custom CV
+registerDoParallel(detectCores() - 1)
+EnsembleModelCV <- cv.glmnet(x = trainEnsembleMatrix[,1:(dim(trainEnsembleMatrix)[2]-1)],
+                              y = trainEnsembleMatrix[,dim(trainEnsembleMatrix)[2]], nfolds = 5,
+                              parallel = TRUE, family = 'gaussian', alpha = 0)
+plot(EnsembleModelCV)
+coef(EnsembleModelCV)
+rm(trainEnsembleMatrix)
 
 ##########################################################
 #PREDICTIONS
 #GBM
 #Loss - no Loss to Fire Prediction
-GBMPrediction <- predict(GBMModel, newdata = test[ , GBMClassPredictors], n.trees = treesClass,, type = 'response')
+GBMPrediction <- predict(GBMModel, newdata = test[ , GBMClassPredictors], n.trees = treesClass, type = 'response')
 #Value Regression Prediction
 GBMPredictionReg <- predict(GBMModelReg, newdata = test[ , GBMRegPredictors], n.trees = treesReg)
 #All Data Regression Prediction
 GBMPredictionAll <- predict(GBMModelAll, newdata = test[ , GBMAllPredictors], n.trees = treesAll)
 
-#2-3 models Ensembles
 #Simple combinations
 #Classification - Regression
 GBMPredReg <- GBMPrediction * GBMPredictionReg
@@ -515,7 +479,7 @@ testMatrix <- model.matrix(~ . , data = test[ , linearClassPredictors])
 GLMNETPrediction <- exp(predict(GLMNETModelCV, newx = testMatrix))   #it needs to be fixed, since model matrix deletes data, the test matrix ends up being incomplete
 rm(testMatrix)
 #Regression
-testMatrixReg <- model.matrix(~ . , data = test[ , c(linearRegPredictors])
+testMatrixReg <- model.matrix(~ . , data = test[ , linearRegPredictors])
 GLMNETPredictionReg <- predict(GLMNETModelCVReg, newx = testMatrixReg)   #it needs to be fixed, since model matrix deletes data, the test matrix ends up being incomplete
 rm(testMatrixReg)
 #All Data
@@ -538,27 +502,27 @@ names(GLMNETTestPredictions) <- c('GLMNETClass', 'GLMNETReg', 'GLMNETAll',
 
 testPredictions <- cbind(GBMTestPredictions, GLMNETTestPredictions)
 
-ensamblePredictions <- predict(EnsembleModel,
-                               newdata = testPredictions,
-                               t.trees = ensembleTrees)
+#transform train Dataframe to model matrix as glmnet only accepts matrices as input
+testEnsembleMatrix <- model.matrix(~ . , data = testPredictions[ , ensembleFeatures]) 
+ensamblePredictions <- predict(EnsembleModelCV,  newx = testEnsembleMatrix)
+
+#ensamblePredictions <- predict(EnsembleModel,
+#                               newdata = testPredictions,
+#                               t.trees = ensembleTrees)
 
 #########################################################
 #Write .csv multiplication
-submissionTemplate$target <- GBMPredReg
-write.csv(submissionTemplate, file = "predictionII.csv", row.names = FALSE)
+submissionTemplate$target <- testPredictions$GBMClass
+write.csv(submissionTemplate, file = "finalPredictionVI.csv", row.names = FALSE)
 
-#Write .csv ensemble
-submissionTemplate$target <- ensamblePredictions
-write.csv(submissionTemplate, file = "predictionTestII.csv", row.names = FALSE)
+submissionTemplate$target <- testPredictions$GBMAll
+write.csv(submissionTemplate, file = "finalPredictionVII.csv", row.names = FALSE)
 
-#Write .csv GLMNET ensemble
-submissionTemplate$target <- ensambleGLMNETPredictions
-write.csv(submissionTemplate, file = "predictionTestIII.csv", row.names = FALSE)
+submissionTemplate$target <- testPredictions$GBMClass
+write.csv(submissionTemplate, file = "finalPredictionVIII.csv", row.names = FALSE)
 
-#Write .csv GLMNET full ensemble
-submissionTemplate$target <- fullensemblePredictions
-write.csv(submissionTemplate, file = "predictionTestIV.csv", row.names = FALSE)
+submissionTemplate$target <- testPredictions$ClassRegGLMNET
+write.csv(submissionTemplate, file = "finalPredictionIX.csv", row.names = FALSE)
 
-#Write .csv GLMNET pred reg
-submissionTemplate$target <- GLMNETPredReg
-write.csv(submissionTemplate, file = "predictionV.csv", row.names = FALSE)
+submissionTemplate$target <- testPredictions$ClassAll
+write.csv(submissionTemplate, file = "finalPredictionX.csv", row.names = FALSE)
