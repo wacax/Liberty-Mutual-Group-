@@ -1,5 +1,5 @@
 #Liberty Mutual Group - Fire Peril Loss Cost
-#ver 0.10
+#ver 1.01
 
 #########################
 #Init
@@ -104,24 +104,26 @@ ggplot(data = fireCosts, aes(x = log(Cost))) +  geom_density()
 ###################################################
 #Predictors Selection
 #Linear Feature Selection
-noBootstrapingSapmles <- 5
+noBootstrapingSapmles <- 1
 ## "pre-allocate" an empty list of length 5
 linearClassPredictorsDF <- vector("list", noBootstrapingSapmles)
 #Loss or No-Loss Predictors
 for (i in 1:noBootstrapingSapmles){
   randomSubset <- sample.int(nrow(train), 150000)
   linearClassPredictors <- linearFeatureSelection(fire ~ ., train[randomSubset, c(seq(3, 19), seq(21,303))])
-  linearClassPredictorsDF[i] <- list(linearClassPredictors[[1]])[1:floor(length(linearClassPredictors[[1]]) * 0.7)]
+  linearClassPredictorsDF[i] <-  list(linearClassPredictors[[1]])[1:floor(length(linearClassPredictors[[1]]) * 0.7)]
 }
 linearClassPredictors <- character()
 for(i in 1:length(linearClassPredictorsDF)){
   linearClassPredictors <- union(linearClassPredictors, linearClassPredictorsDF[[i]])
 }
 #Predictor selection using trees
-set.seed(1000)
+set.seed(999)
 randomSubset <- sample.int(nrow(train), nrow(train)) #use this to use full data
 treeModel <- gbm.fit(x = train[randomSubset, c(seq(3, 19), seq(21,302))], y = train$fire[randomSubset],
-                     distribution = 'bernoulli', nTrain = floor(nrow(train) * 0.7), n.trees = 500, verbose = TRUE)
+                     w = weightsTrain[randomSubset],
+                     distribution = 'bernoulli', nTrain = floor(nrow(train) * 0.7), 
+                     n.trees = 500, verbose = TRUE)
 best.iter <- gbm.perf(treeModel, method = "test")
 GBMClassPredictors <- summary(treeModel)
 GBMClassPredictors <- as.character(GBMClassPredictors$var[GBMClassPredictors$rel.inf > 0.5])
@@ -133,6 +135,7 @@ linearRegPredictors <- linearFeatureSelection(target ~ ., train[whichLoss, c(seq
 linearRegPredictors <- linearRegPredictors[[1]]
 #Predictor selection using trees
 treeModel <- gbm.fit(x = train[whichLoss, c(seq(3, 19), seq(21,302))], y = train$target[whichLoss],
+                     w = weightsTrain[whichLoss],
                      distribution = 'gaussian', nTrain = floor(nrow(train) * 0.7), n.trees = 1500, verbose = TRUE)
 best.iter <- gbm.perf(treeModel, method="test")
 GBMRegPredictors <- summary(treeModel)
@@ -154,8 +157,10 @@ for(i in 1:length(linearFullPredictorsDF)){
   linearPredictorsFull <- union(linearPredictorsFull, linearFullPredictorsDF[[i]])
 }
 #Predictor selection using trees
+set.seed(1000)
 randomSubset <- sample.int(nrow(train), nrow(train)) #use this to use full data
 treeModel <- gbm.fit(x = train[randomSubset, c(seq(3, 19), seq(21,302))], y = train$target[randomSubset],
+                     w = weightsTrain[randomSubset],
                      distribution = 'gaussian', nTrain = floor(nrow(train) * 0.7), n.trees = 500, verbose = TRUE)
 best.iter <- gbm.perf(treeModel, method="test")
 GBMAllPredictors <- summary(treeModel)
@@ -176,7 +181,7 @@ GBMControl <- trainControl(method = "cv",
 
 gbmGrid <- expand.grid(.interaction.depth = seq(1, 5, 2),
                        .shrinkage = c(0.001, 0.003), 
-                       .n.trees = 500)
+                       .n.trees = 300)
 
 set.seed(1001)
 randomSubset <- sample.int(nrow(train), nrow(train)) #use this to use full data
@@ -186,6 +191,7 @@ gbmMODClass <- train(form = lossFactor ~ .,
                      tuneGrid = gbmGrid,
                      trControl = GBMControl,
                      distribution = 'bernoulli',
+                     weights = weightsTrain[randomSubset],
                      train.fraction = 0.7,
                      verbose = TRUE)
 
@@ -201,6 +207,7 @@ while(treesClass >= treesIterated - 20){
   # do another 5000 iterations  
   gbmMODClassExpanded <- gbm.more(gbmMODClassExpanded, max(gbmGrid$.n.trees),
                                   data = train[randomSubset , c(GBMClassPredictors, 'lossFactor')],
+                                  weights = weightsTrain[randomSubset],
                                   verbose=TRUE)
   treesClass <- gbm.perf(gbmMODClassExpanded, method = 'test')
   treesIterated <- treesIterated + max(gbmGrid$.n.trees)
@@ -214,7 +221,7 @@ set.seed(1002)
 train['lossFactor'] <- ifelse(train$target > 0, 1, 0)
 randomSubset <- sample.int(nrow(train), nrow(train)) #use this to use full data
 GBMModel <- gbm.fit(x = train[randomSubset , GBMClassPredictors], y = train$lossFactor[randomSubset],
-                    distribution = 'bernoulli',
+                    distribution = 'bernoulli', w = weightsTrain[randomSubset],
                     interaction.depth = as.numeric(gbmMODClass$bestTune[2]),
                     shrinkage = as.numeric(gbmMODClass$bestTune[3]), 
                     n.trees = treesClass, verbose = TRUE)
@@ -229,7 +236,7 @@ GBMControl <- trainControl(method = "cv",
                            number = 5,
                            verboseIter = TRUE)
 
-gbmGrid <- expand.grid(.interaction.depth = seq(1, 16, 3),
+gbmGrid <- expand.grid(.interaction.depth = seq(1, 9, 3),
                        .shrinkage = c(0.001, 0.003), 
                        .n.trees = 2500)
 
@@ -239,6 +246,7 @@ gbmMODReg <- train(form = target ~ .,
                    tuneGrid = gbmGrid,
                    trControl = GBMControl,
                    distribution = 'gaussian',
+                   weights = weightsTrain[randomSubset],
                    train.fraction =  0.7,
                    verbose = TRUE)
 
@@ -247,7 +255,7 @@ treesReg <- gbm.perf(gbmMODReg$finalModel, method = 'test')
 #Final Model
 whichFire <- which(train$target > 0)
 GBMModelReg <- gbm.fit(x = train[whichFire, GBMRegPredictors], y = train[whichFire, 'target'],
-                       distribution = 'gaussian',
+                       distribution = 'gaussian', w = weightsTrain[whichFire],
                        interaction.depth = gbmMODReg$bestTune[2], shrinkage = gbmMODReg$bestTune[3], 
                        n.trees = treesReg, verbose = TRUE)
 summary.gbm(GBMModelReg)
@@ -262,7 +270,7 @@ GBMControl <- trainControl(method = "cv",
 
 gbmGrid <- expand.grid(.interaction.depth = seq(1, 7, 3),
                        .shrinkage = c(0.001, 0.003), 
-                       .n.trees = 500)
+                       .n.trees = 300)
 
 set.seed(1003)
 randomSubset <- sample.int(nrow(train), nrow(train)) #use this to use full data
@@ -272,6 +280,7 @@ gbmMODAll <- train(form = target ~ .,
                    tuneGrid = gbmGrid,
                    trControl = GBMControl,
                    distribution = 'gaussian',
+                   weights = weightsTrain[randomSubset],
                    train.fraction = 0.7,
                    verbose = TRUE)
 
@@ -283,8 +292,9 @@ gbmMODAllExpanded <- gbmMODAll$finalModel
 while(treesAll >= treesIterated - 20){
   # do another 5000 iterations  
   gbmMODAllExpanded <- gbm.more(gbmMODAllExpanded, max(gbmGrid$.n.trees),
-                                  data = train[randomSubset , c(GBMAllPredictors, 'target')],
-                                  verbose=TRUE)
+                                data = train[randomSubset , c(GBMAllPredictors, 'target')],
+                                weights = weightsTrain[randomSubset],
+                                verbose=TRUE)
   treesAll <- gbm.perf(gbmMODAllExpanded, method = 'test')
   treesIterated <- treesIterated + max(gbmGrid$.n.trees)
   
@@ -295,7 +305,8 @@ while(treesAll >= treesIterated - 20){
 set.seed(1004)
 randomSubset <- sample.int(nrow(train), nrow(train)) #use this to use full data
 GBMModelAll <- gbm.fit(x = train[randomSubset , GBMAllPredictors], y = train$target[randomSubset], 
-                       distribution = 'gaussian', interaction.depth = gbmMODAll$bestTune[2],
+                       distribution = 'gaussian', w = weightsTrain[randomSubset]
+                       interaction.depth = gbmMODAll$bestTune[2],
                        shrinkage = gbmMODAll$bestTune[3], n.trees = treesAll, verbose = TRUE)
 summary.gbm(GBMModelAll)
 plot.gbm(GBMModelAll)
@@ -338,7 +349,7 @@ res
 
 #GLMNET
 #Classification loss or no loss due to fire
-train['lossFactor'] <- as.factor(ifelse(train$target > 0, 1, 0))
+train['lossFactor'] <- ifelse(train$target > 0, 1, 0)
 #Cross-validation
 set.seed(1005)
 randomSubset <- sample.int(nrow(train), nrow(train)) #use this to use full data
@@ -348,7 +359,8 @@ trainClassMatrix <- model.matrix(~ . , data = train[randomSubset, match(c(linear
 registerDoParallel(detectCores() - 1)
 GLMNETModelCV <- cv.glmnet(x = trainClassMatrix[,1:(dim(trainClassMatrix)[2]-1)], 
                            y = trainClassMatrix[,dim(trainClassMatrix)[2]], 
-                           nfolds = 5, parallel = TRUE, family = 'binomial', alpha = 0)
+                           weights = weightsTrain[randomSubset],
+                           nfolds = 5, parallel = TRUE, family = 'binomial')
 plot(GLMNETModelCV)
 coef(GLMNETModelCV)
 rm(trainClassMatrix)
@@ -366,7 +378,8 @@ trainRegMatrix <- model.matrix(~ . , data = train[whichFire , match(c(linearRegP
 registerDoParallel(detectCores() - 1)
 GLMNETModelCVReg <- cv.glmnet(x = trainRegMatrix[,1:(dim(trainRegMatrix)[2]-1)], 
                               y = trainRegMatrix[,dim(trainRegMatrix)[2]], nfolds = 5,
-                              parallel = TRUE, family = 'gaussian', alpha = 0)
+                              weights = weightsTrain[randomSubset],
+                              parallel = TRUE, family = 'gaussian')
 plot(GLMNETModelCVReg)
 coef(GLMNETModelCVReg)
 rm(trainRegMatrix)
@@ -384,7 +397,8 @@ trainAllMatrix <- model.matrix(~ . , data = train[randomSubset , match(c(linearP
 registerDoParallel(detectCores() - 1)
 GLMNETModelCVAll <- cv.glmnet(x = trainAllMatrix[,1:(dim(trainAllMatrix)[2]-1)],
                               y = trainAllMatrix[,dim(trainAllMatrix)[2]], nfolds = 5,
-                              parallel = TRUE, family = 'gaussian', alpha = 0)
+                              weights = weightsTrain[randomSubset],
+                              parallel = TRUE, family = 'gaussian')
 plot(GLMNETModelCVAll)
 coef(GLMNETModelCVAll)
 rm(trainAllMatrix)
@@ -444,7 +458,7 @@ trainEnsembleMatrix <- model.matrix(~ . , data = trainPredictions[randomSubset ,
 registerDoParallel(detectCores() - 1)
 EnsembleModelCV <- cv.glmnet(x = trainEnsembleMatrix[,1:(dim(trainEnsembleMatrix)[2]-1)],
                               y = trainEnsembleMatrix[,dim(trainEnsembleMatrix)[2]], nfolds = 5,
-                              parallel = TRUE, family = 'gaussian', alpha = 0)
+                              parallel = TRUE, family = 'gaussian')
 plot(EnsembleModelCV)
 coef(EnsembleModelCV)
 rm(trainEnsembleMatrix)
