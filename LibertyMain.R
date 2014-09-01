@@ -72,10 +72,25 @@ for(i in 1:length(numericIdx)){
 NAsPerColumn <- apply(test, 2, function(column){return(sum(is.na(column)))})
 print(paste0('There are ', length(which(apply(is.na(test), 2, sum) > 0)), ' NA rows after normalization'))
 
+#OPTIONAL
+#transform ordinal features to numeric and nominal to factors
+#Fill in ordinal NAs (value of Z) with mean
+ordinalColumns <- c(3, 5, 6, 9)
+meanCols <- meanCol(train[ , ordinalColumns])
+for (i in length(ordinalColumns)){
+  train[train[ , ordinalColumns(i)] == 'Z' , ordinalColumns(i)] <- meanCols[i]
+}
+
+train <- transform(train, var1 = as.numeric(var1), var2 = as.numeric(var2), var3 = as.numeric(var3), 
+                   var4 = as.numeric(var4))
+
 #------------------------------------------------
 #extract gini weights
 weightsTrain <- train$var11
 weightsTest <- test$var11
+
+#define Targets
+targets <- train$targets
 
 #NA indices, regsubsets and kmeans are sensitive to NAs
 noNAIndices <- which(apply(is.na(train), 1, sum) == 0)
@@ -136,7 +151,8 @@ linearRegPredictors <- linearRegPredictors[[1]]
 #Predictor selection using trees
 treeModel <- gbm.fit(x = train[whichLoss, c(seq(3, 19), seq(21,302))], y = train$target[whichLoss],
                      w = weightsTrain[whichLoss],
-                     distribution = 'gaussian', nTrain = floor(nrow(train) * 0.7), n.trees = 1500, verbose = TRUE)
+                     distribution = 'gaussian', nTrain = floor(nrow(train) * 0.7),
+                     n.trees = 1500, verbose = TRUE)
 best.iter <- gbm.perf(treeModel, method="test")
 GBMRegPredictors <- summary(treeModel)
 GBMRegPredictors <- as.character(GBMRegPredictors$var[GBMRegPredictors$rel.inf > 0.5])
@@ -202,6 +218,7 @@ confusionMatrix(gbmPred, churnTest$churn)
 treesClass <- gbm.perf(gbmMODClass$finalModel, method = 'test')
 treesIterated <- max(gbmGrid$.n.trees)
 gbmMODClassExpanded <- gbmMODClass$finalModel
+train['lossFactor'] <- ifelse(train$target > 0, 1, 0)
 
 while(treesClass >= treesIterated - 20){
   # do another 5000 iterations  
@@ -212,7 +229,7 @@ while(treesClass >= treesIterated - 20){
   treesClass <- gbm.perf(gbmMODClassExpanded, method = 'test')
   treesIterated <- treesIterated + max(gbmGrid$.n.trees)
   
-  if(treesIterated >= 50000){break}  
+  if(treesIterated >= 15000){break}  
 }
 
 #Final Model
@@ -246,7 +263,7 @@ gbmMODReg <- train(form = target ~ .,
                    tuneGrid = gbmGrid,
                    trControl = GBMControl,
                    distribution = 'gaussian',
-                   weights = weightsTrain[randomSubset],
+                   weights = weightsTrain[whichFire],
                    train.fraction =  0.7,
                    verbose = TRUE)
 
@@ -298,14 +315,14 @@ while(treesAll >= treesIterated - 20){
   treesAll <- gbm.perf(gbmMODAllExpanded, method = 'test')
   treesIterated <- treesIterated + max(gbmGrid$.n.trees)
   
-  if(treesIterated >= 50000){break}  
+  if(treesIterated >= 15000){break}  
 }
 
 #Final Model
 set.seed(1004)
 randomSubset <- sample.int(nrow(train), nrow(train)) #use this to use full data
 GBMModelAll <- gbm.fit(x = train[randomSubset , GBMAllPredictors], y = train$target[randomSubset], 
-                       distribution = 'gaussian', w = weightsTrain[randomSubset]
+                       distribution = 'gaussian', w = weightsTrain[randomSubset],
                        interaction.depth = gbmMODAll$bestTune[2],
                        shrinkage = gbmMODAll$bestTune[3], n.trees = treesAll, verbose = TRUE)
 summary.gbm(GBMModelAll)
@@ -317,7 +334,7 @@ trainGBMClass <- predict(GBMModel, newdata = train[ , GBMClassPredictors], n.tre
 trainGBMReg <- predict(GBMModelReg, newdata = train[ , GBMRegPredictors], n.trees = treesReg)
 trainGBMAll <- predict(GBMModelAll, newdata = train[ , GBMAllPredictors], n.trees = treesAll)
 
-#GLMNET Extra features
+#GBM Extra features
 trainClassReg <- trainGBMClass * trainGBMReg
 trainClassAll <- trainGBMClass * trainGBMAll
 trainRegAll <- trainGBMReg * trainGBMAll
@@ -378,7 +395,7 @@ trainRegMatrix <- model.matrix(~ . , data = train[whichFire , match(c(linearRegP
 registerDoParallel(detectCores() - 1)
 GLMNETModelCVReg <- cv.glmnet(x = trainRegMatrix[,1:(dim(trainRegMatrix)[2]-1)], 
                               y = trainRegMatrix[,dim(trainRegMatrix)[2]], nfolds = 5,
-                              weights = weightsTrain[randomSubset],
+                              weights = weightsTrain[whichFire],
                               parallel = TRUE, family = 'gaussian')
 plot(GLMNETModelCVReg)
 coef(GLMNETModelCVReg)
@@ -431,7 +448,20 @@ GLMNETTrainPredictions <- data.frame(trainGLMNETClass, trainGLMNETReg, trainGLMN
 names(GLMNETTrainPredictions) <- c('GLMNETClass', 'GLMNETReg', 'GLMNETAll', 'ClassRegGLMNET',
                                    'ClassAllGLMNET', 'RegAllGLMNET', 'target')
 
-trainPredictions <- cbind(GBMTrainPredictions, GLMNETTrainPredictions)
+#Mixed Features
+trainClassGBMRegGLMNET <- trainGBMClass * trainGLMNETReg
+trainClassGBMAllGLMNET <- trainGBMClass * trainGLMNETAll
+trainRegGBMAllGLMNET <- trainGBMReg * trainGLMNETAll
+trainClassGLMNETRegGBM <- trainGLMNETClass * trainGBMReg
+trainClassGLMNETAllGBM <- trainGLMNETClass * trainGBMAll
+trainRegGLMNETAllGBM <- trainGLMNETReg * trainGBMAll
+#Mixed Features Data Frame
+trainExtra <- data.frame(trainClassGBMRegGLMNET, trainClassGBMAllGLMNET, trainRegGBMAllGLMNET,
+                         trainClassGLMNETRegGBM, trainClassGLMNETAllGBM, trainRegGLMNETAllGBM)
+names(trainExtra) <- c('ClassGBMRegGLMNET', 'ClassGBMAllGLMNET', 'RegGBMAllGLMNET',
+                       'ClassGLMNETRegGBM', 'ClassGLMNETAllGBM', 'RegGLMNETAllGBM')
+
+trainPredictions <- cbind(GBMTrainPredictions, GLMNETTrainPredictions, trainExtra)
 
 ######################################################################
 #ENSEMBLES
@@ -439,7 +469,7 @@ trainPredictions <- cbind(GBMTrainPredictions, GLMNETTrainPredictions)
 set.seed(1008)
 randomSubset <- sample.int(nrow(trainPredictions), nrow(trainPredictions))
 linearBestModels <- regsubsets(target ~ ., data = trainPredictions, 
-                               method = 'forward', nvmax = 12)
+                               method = 'forward', nvmax = 19)
 bestMods <- summary(linearBestModels)
 plot(bestMods$cp, xlab="Number of Variables", ylab="CP Error")
 points(which.min(bestMods$cp), bestMods$cp[which.min(bestMods$cp)],pch=20,col="red")
@@ -462,6 +492,17 @@ EnsembleModelCV <- cv.glmnet(x = trainEnsembleMatrix[,1:(dim(trainEnsembleMatrix
 plot(EnsembleModelCV)
 coef(EnsembleModelCV)
 rm(trainEnsembleMatrix)
+
+#-----------------------------------------------------
+#Weighted Gini Scores of best predictions
+scores <- sapply(ensembleFeatures, function(feature){
+  return(WeightedGini(targets, weightsTrain, trainPredictions[ , feature]))
+})
+print(scores)
+#score of averages
+print(WeightedGini(targets, weightsTrain, rep(mean(targets), length(targets))))
+#all zeroes score
+print(WeightedGini(targets, weightsTrain, rep(0, length(targets))))
 
 ##########################################################
 #PREDICTIONS
@@ -514,15 +555,24 @@ GLMNETTestPredictions <- data.frame(GLMNETPrediction, GLMNETPredictionReg, GLMNE
 names(GLMNETTestPredictions) <- c('GLMNETClass', 'GLMNETReg', 'GLMNETAll', 
                                    'ClassRegGLMNET', 'ClassAllGLMNET', 'RegAllGLMNET')
 
-testPredictions <- cbind(GBMTestPredictions, GLMNETTestPredictions)
+#Extra Features
+testClassGBMRegGLMNET <- GBMPrediction * GLMNETPredictionReg
+testClassGBMAllGLMNET <- GBMPrediction * GLMNETPredictionAll
+testRegGBMAllGLMNET <- GBMPredictionReg * GLMNETPredictionAll
+testClassGLMNETRegGBM <- GLMNETPrediction * GBMPredictionReg
+testClassGLMNETAllGBM <- GLMNETPrediction * GBMPredictionAll
+testRegGLMNETAllGBM <- GLMNETPredictionReg * GBMPredictionAll
+#Mixed Features Data Frame
+testExtra <- data.frame(testClassGBMRegGLMNET, testClassGBMAllGLMNET, testRegGBMAllGLMNET,
+                        testClassGLMNETRegGBM, testClassGLMNETAllGBM, testRegGLMNETAllGBM)
+names(testExtra) <- c('ClassGBMRegGLMNET', 'ClassGBMAllGLMNET', 'RegGBMAllGLMNET',
+                      'ClassGLMNETRegGBM', 'ClassGLMNETAllGBM', 'RegGLMNETAllGBM')
+
+testPredictions <- cbind(GBMTestPredictions, GLMNETTestPredictions, testExtra)
 
 #transform train Dataframe to model matrix as glmnet only accepts matrices as input
 testEnsembleMatrix <- model.matrix(~ . , data = testPredictions[ , ensembleFeatures]) 
 ensamblePredictions <- predict(EnsembleModelCV,  newx = testEnsembleMatrix)
-
-#ensamblePredictions <- predict(EnsembleModel,
-#                               newdata = testPredictions,
-#                               t.trees = ensembleTrees)
 
 #########################################################
 #Write .csv multiplication
@@ -540,3 +590,33 @@ write.csv(submissionTemplate, file = "finalPredictionIX.csv", row.names = FALSE)
 
 submissionTemplate$target <- testPredictions$ClassAll
 write.csv(submissionTemplate, file = "finalPredictionX.csv", row.names = FALSE)
+
+submissionTemplate$target <- testPredictions$ClassReg #1
+write.csv(submissionTemplate, file = "finalPredictionXI.csv", row.names = FALSE)
+
+submissionTemplate$target <- testPredictions$ClassGLMNETAllGBM #4
+write.csv(submissionTemplate, file = "finalPredictionXII.csv", row.names = FALSE)
+
+submissionTemplate$target <- testPredictions$ClassAll #5
+write.csv(submissionTemplate, file = "finalPredictionXIII.csv", row.names = FALSE)
+
+submissionTemplate$target <- testPredictions$RegGLMNETAllGBM #2
+write.csv(submissionTemplate, file = "finalPredictionXIV.csv", row.names = FALSE)
+
+submissionTemplate$target <- testPredictions$RegAll #3
+write.csv(submissionTemplate, file = "finalPredictionXV.csv", row.names = FALSE)
+
+submissionTemplate$target <- testPredictions$RegAll #3
+write.csv(submissionTemplate, file = "finalPredictionXVI.csv", row.names = FALSE)
+
+submissionTemplate$target <- testPredictions$ClassGLMNETAllGBM #4
+write.csv(submissionTemplate, file = "finalPredictionXVII.csv", row.names = FALSE)
+
+submissionTemplate$target <- testPredictions$RegGLMNETAllGBM #1
+write.csv(submissionTemplate, file = "finalPredictionXVIII.csv", row.names = FALSE)
+
+submissionTemplate$target <- testPredictions$GBMAll #2
+write.csv(submissionTemplate, file = "finalPredictionXIX.csv", row.names = FALSE) 
+
+submissionTemplate$target <- testPredictions$ClassReg #5
+write.csv(submissionTemplate, file = "finalPredictionXX.csv", row.names = FALSE)
