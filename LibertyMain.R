@@ -72,25 +72,24 @@ for(i in 1:length(numericIdx)){
 NAsPerColumn <- apply(test, 2, function(column){return(sum(is.na(column)))})
 print(paste0('There are ', length(which(apply(is.na(test), 2, sum) > 0)), ' NA rows after normalization'))
 
+#------------------------------------------------
 #OPTIONAL
 #transform ordinal features to numeric and nominal to factors
 #Fill in ordinal NAs (value of Z) with mean
-ordinalColumns <- c(3, 5, 6, 9)
-meanCols <- meanCol(train[ , ordinalColumns])
-for (i in length(ordinalColumns)){
-  train[train[ , ordinalColumns(i)] == 'Z' , ordinalColumns(i)] <- meanCols[i]
+ordinalColumns <- c('var1', 'var3', 'var7', 'var8')
+for (i in 1:length(ordinalColumns)){
+  ixMedian <- median(as.numeric(c(train[train[ , ordinalColumns[i]] != 'Z' , ordinalColumns[i]], test[test[ , ordinalColumns[i]] != 'Z' , ordinalColumns[i]])))
+  train[train[ , ordinalColumns[i]] == 'Z' , ordinalColumns[i]] <- as.character(ixMedian)
+  test[test[ , ordinalColumns[i]] == 'Z' , ordinalColumns[i]] <- as.character(ixMedian)
 }
 
-train <- transform(train, var1 = as.numeric(var1), var2 = as.numeric(var2), var3 = as.numeric(var3), 
-                   var4 = as.numeric(var4))
-
-#------------------------------------------------
-#extract gini weights
-weightsTrain <- train$var11
-weightsTest <- test$var11
-
-#define Targets
-targets <- train$targets
+#Data Transformation
+train <- transform(train, var1 = as.integer(var1), var2 = as.factor(var2), var3 = as.integer(var3), 
+                   var4 = as.factor(var4), var5 = as.factor(var5), var6 = as.factor(var6), 
+                   var7 = as.integer(var7), var8 = as.integer(var8), var9 = as.factor(var9))
+test <- transform(test, var1 = as.integer(var1), var2 = as.factor(var2), var3 = as.integer(var3), 
+                  var4 = as.factor(var4), var5 = as.factor(var5), var6 = as.factor(var6), 
+                  var7 = as.integer(var7), var8 = as.integer(var8), var9 = as.factor(var9))
 
 #NA indices, regsubsets and kmeans are sensitive to NAs
 noNAIndices <- which(apply(is.na(train), 1, sum) == 0)
@@ -98,13 +97,12 @@ noNAIndices <- which(apply(is.na(train), 1, sum) == 0)
 #Add a new column that indicates whether there was a fire or not
 train['fire'] <- ifelse(train$target > 0, 1, 0)
 
-#Data Transformation
-train <- transform(train, var1 = as.factor(var1), var2 = as.factor(var2), var3 = as.factor(var3), 
-                   var4 = as.factor(var4), var5 = as.factor(var5), var6 = as.factor(var6), var7 = as.factor(var7), 
-                   var8 = as.factor(var8), var9 = as.factor(var9))
-test <- transform(test, var1 = as.factor(var1), var2 = as.factor(var2), var3 = as.factor(var3), 
-                  var4 = as.factor(var4), var5 = as.factor(var5), var6 = as.factor(var6), var7 = as.factor(var7), 
-                  var8 = as.factor(var8), var9 = as.factor(var9))
+#extract gini weights
+weightsTrain <- train$var11
+weightsTest <- test$var11
+
+#define Targets
+targets <- train$targets
 
 ##################################################
 #EDA
