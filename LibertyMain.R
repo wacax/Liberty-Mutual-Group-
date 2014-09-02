@@ -72,8 +72,6 @@ for(i in 1:length(numericIdx)){
 NAsPerColumn <- apply(test, 2, function(column){return(sum(is.na(column)))})
 print(paste0('There are ', length(which(apply(is.na(test), 2, sum) > 0)), ' NA rows after normalization'))
 
-#------------------------------------------------
-#OPTIONAL
 #transform ordinal features to numeric and nominal to factors
 #Fill in ordinal NAs (value of Z) with mean
 ordinalColumns <- c('var1', 'var3', 'var7', 'var8')
@@ -84,12 +82,12 @@ for (i in 1:length(ordinalColumns)){
 }
 
 #Data Transformation
-train <- transform(train, var1 = as.integer(var1), var2 = as.factor(var2), var3 = as.integer(var3), 
+train <- transform(train, var1 = as.numeric(var1), var2 = as.factor(var2), var3 = as.numeric(var3), 
                    var4 = as.factor(var4), var5 = as.factor(var5), var6 = as.factor(var6), 
-                   var7 = as.integer(var7), var8 = as.integer(var8), var9 = as.factor(var9))
-test <- transform(test, var1 = as.integer(var1), var2 = as.factor(var2), var3 = as.integer(var3), 
+                   var7 = as.numeric(var7), var8 = as.numeric(var8), var9 = as.factor(var9))
+test <- transform(test, var1 = as.numeric(var1), var2 = as.factor(var2), var3 = as.numeric(var3), 
                   var4 = as.factor(var4), var5 = as.factor(var5), var6 = as.factor(var6), 
-                  var7 = as.integer(var7), var8 = as.integer(var8), var9 = as.factor(var9))
+                  var7 = as.numeric(var7), var8 = as.numeric(var8), var9 = as.factor(var9))
 
 #NA indices, regsubsets and kmeans are sensitive to NAs
 noNAIndices <- which(apply(is.na(train), 1, sum) == 0)
@@ -136,7 +134,7 @@ randomSubset <- sample.int(nrow(train), nrow(train)) #use this to use full data
 treeModel <- gbm.fit(x = train[randomSubset, c(seq(3, 19), seq(21,302))], y = train$fire[randomSubset],
                      w = weightsTrain[randomSubset],
                      distribution = 'bernoulli', nTrain = floor(nrow(train) * 0.7), 
-                     n.trees = 500, verbose = TRUE)
+                     n.trees = 200, verbose = TRUE)
 best.iter <- gbm.perf(treeModel, method = "test")
 GBMClassPredictors <- summary(treeModel)
 GBMClassPredictors <- as.character(GBMClassPredictors$var[GBMClassPredictors$rel.inf > 0.5])
@@ -200,7 +198,7 @@ gbmGrid <- expand.grid(.interaction.depth = seq(1, 5, 2),
 set.seed(1001)
 randomSubset <- sample.int(nrow(train), nrow(train)) #use this to use full data
 gbmMODClass <- train(form = lossFactor ~ ., 
-                     data = train[randomSubset , c(GBMClassPredictors, 'lossFactor')],
+                     data = train[randomSubset , c(linearClassPredictors, 'lossFactor')],
                      method = "gbm",
                      tuneGrid = gbmGrid,
                      trControl = GBMControl,
@@ -221,7 +219,7 @@ train['lossFactor'] <- ifelse(train$target > 0, 1, 0)
 while(treesClass >= treesIterated - 20){
   # do another 5000 iterations  
   gbmMODClassExpanded <- gbm.more(gbmMODClassExpanded, max(gbmGrid$.n.trees),
-                                  data = train[randomSubset , c(GBMClassPredictors, 'lossFactor')],
+                                  data = train[randomSubset , c(linearClassPredictors, 'lossFactor')],
                                   weights = weightsTrain[randomSubset],
                                   verbose=TRUE)
   treesClass <- gbm.perf(gbmMODClassExpanded, method = 'test')
@@ -235,7 +233,7 @@ while(treesClass >= treesIterated - 20){
 set.seed(1002)
 train['lossFactor'] <- ifelse(train$target > 0, 1, 0)
 randomSubset <- sample.int(nrow(train), nrow(train)) #use this to use full data
-GBMModel <- gbm.fit(x = train[randomSubset , GBMClassPredictors], y = train$lossFactor[randomSubset],
+GBMModel <- gbm.fit(x = train[randomSubset , linearClassPredictors], y = train$lossFactor[randomSubset],
                     distribution = 'bernoulli', w = weightsTrain[randomSubset],
                     interaction.depth = as.numeric(gbmMODClass$bestTune[2]),
                     shrinkage = as.numeric(gbmMODClass$bestTune[3]), 
@@ -256,7 +254,7 @@ gbmGrid <- expand.grid(.interaction.depth = seq(1, 9, 3),
                        .n.trees = 2500)
 
 gbmMODReg <- train(form = target ~ ., 
-                   data = train[whichFire , c(GBMRegPredictors, 'target')],
+                   data = train[whichFire , c(linearRegPredictors, 'target')],
                    method = "gbm",
                    tuneGrid = gbmGrid,
                    trControl = GBMControl,
@@ -269,9 +267,10 @@ gbmMODReg <- train(form = target ~ .,
 treesReg <- gbm.perf(gbmMODReg$finalModel, method = 'test')
 #Final Model
 whichFire <- which(train$target > 0)
-GBMModelReg <- gbm.fit(x = train[whichFire, GBMRegPredictors], y = train[whichFire, 'target'],
+GBMModelReg <- gbm.fit(x = train[whichFire, linearRegPredictors], y = train[whichFire, 'target'],
                        distribution = 'gaussian', w = weightsTrain[whichFire],
-                       interaction.depth = gbmMODReg$bestTune[2], shrinkage = gbmMODReg$bestTune[3], 
+                       interaction.depth = as.numeric(gbmMODReg$bestTune[2]),
+                       shrinkage = as.numeric(gbmMODReg$bestTune[3]), 
                        n.trees = treesReg, verbose = TRUE)
 summary.gbm(GBMModelReg)
 plot.gbm(GBMModelReg)
@@ -290,7 +289,7 @@ gbmGrid <- expand.grid(.interaction.depth = seq(1, 7, 3),
 set.seed(1003)
 randomSubset <- sample.int(nrow(train), nrow(train)) #use this to use full data
 gbmMODAll <- train(form = target ~ ., 
-                   data = train[randomSubset , c(GBMAllPredictors, 'target')],
+                   data = train[randomSubset , c(linearPredictorsFull, 'target')],
                    method = "gbm",
                    tuneGrid = gbmGrid,
                    trControl = GBMControl,
@@ -307,7 +306,7 @@ gbmMODAllExpanded <- gbmMODAll$finalModel
 while(treesAll >= treesIterated - 20){
   # do another 5000 iterations  
   gbmMODAllExpanded <- gbm.more(gbmMODAllExpanded, max(gbmGrid$.n.trees),
-                                data = train[randomSubset , c(GBMAllPredictors, 'target')],
+                                data = train[randomSubset , c(linearPredictorsFull, 'target')],
                                 weights = weightsTrain[randomSubset],
                                 verbose=TRUE)
   treesAll <- gbm.perf(gbmMODAllExpanded, method = 'test')
@@ -319,7 +318,7 @@ while(treesAll >= treesIterated - 20){
 #Final Model
 set.seed(1004)
 randomSubset <- sample.int(nrow(train), nrow(train)) #use this to use full data
-GBMModelAll <- gbm.fit(x = train[randomSubset , GBMAllPredictors], y = train$target[randomSubset], 
+GBMModelAll <- gbm.fit(x = train[randomSubset , linearPredictorsFull], y = train$target[randomSubset], 
                        distribution = 'gaussian', w = weightsTrain[randomSubset],
                        interaction.depth = gbmMODAll$bestTune[2],
                        shrinkage = gbmMODAll$bestTune[3], n.trees = treesAll, verbose = TRUE)
@@ -328,9 +327,9 @@ plot.gbm(GBMModelAll)
 pretty.gbm.tree(GBMModelAll, i.tree = treesAll)
 
 #Ensemble of Models
-trainGBMClass <- predict(GBMModel, newdata = train[ , GBMClassPredictors], n.trees = treesClass, type = 'response')
-trainGBMReg <- predict(GBMModelReg, newdata = train[ , GBMRegPredictors], n.trees = treesReg)
-trainGBMAll <- predict(GBMModelAll, newdata = train[ , GBMAllPredictors], n.trees = treesAll)
+trainGBMClass <- predict(GBMModel, newdata = train[ , linearClassPredictors], n.trees = treesClass, type = 'response')
+trainGBMReg <- predict(GBMModelReg, newdata = train[ , linearRegPredictors], n.trees = treesReg)
+trainGBMAll <- predict(GBMModelAll, newdata = train[ , linearPredictorsFull], n.trees = treesAll)
 
 #GBM Extra features
 trainClassReg <- trainGBMClass * trainGBMReg
@@ -424,15 +423,15 @@ plot(GLMNETModelAll, xvar="lambda", label=TRUE)
 #---------------------------------------------------------
 #GLMNETS' predictions
 trainClassMatrix <- model.matrix(~ . , data = train[ , linearClassPredictors]) 
-trainGLMNETClass <- exp(predict(GLMNETModelCV, newx = trainClassMatrix))
+trainGLMNETClass <- exp(predict(GLMNETModelCV, newx = trainClassMatrix, s = 'lambda.min'))
 rm(trainClassMatrix)
 
 trainRegMatrix <- model.matrix(~ . , data = train[ , linearRegPredictors])
-trainGLMNETReg <- predict(GLMNETModelCVReg, newx = trainRegMatrix)
+trainGLMNETReg <- predict(GLMNETModelCVReg, newx = trainRegMatrix, s ='lambda.min')
 rm(trainRegMatrix)
 
 trainAllMatrix <- model.matrix(~ . , data = train[ , linearPredictorsFull]) 
-trainGLMNETAll <- predict(GLMNETModelCVAll, newx = trainAllMatrix)
+trainGLMNETAll <- predict(GLMNETModelCVAll, newx = trainAllMatrix, s = 'lambda.min')
 rm(trainAllMatrix)
 
 #GLMNET Extra features
@@ -506,11 +505,11 @@ print(WeightedGini(targets, weightsTrain, rep(0, length(targets))))
 #PREDICTIONS
 #GBM
 #Loss - no Loss to Fire Prediction
-GBMPrediction <- predict(GBMModel, newdata = test[ , GBMClassPredictors], n.trees = treesClass, type = 'response')
+GBMPrediction <- predict(GBMModel, newdata = test[ , linearClassPredictors], n.trees = treesClass, type = 'response')
 #Value Regression Prediction
-GBMPredictionReg <- predict(GBMModelReg, newdata = test[ , GBMRegPredictors], n.trees = treesReg)
+GBMPredictionReg <- predict(GBMModelReg, newdata = test[ , linearRegPredictors], n.trees = treesReg)
 #All Data Regression Prediction
-GBMPredictionAll <- predict(GBMModelAll, newdata = test[ , GBMAllPredictors], n.trees = treesAll)
+GBMPredictionAll <- predict(GBMModelAll, newdata = test[ , linearPredictorsFull], n.trees = treesAll)
 
 #Simple combinations
 #Classification - Regression
@@ -529,15 +528,15 @@ names(GBMTestPredictions) <- c('GBMClass', 'GBMReg', 'GBMAll',
 #GLMNET
 #Classification
 testMatrix <- model.matrix(~ . , data = test[ , linearClassPredictors])
-GLMNETPrediction <- exp(predict(GLMNETModelCV, newx = testMatrix))   #it needs to be fixed, since model matrix deletes data, the test matrix ends up being incomplete
+GLMNETPrediction <- exp(predict(GLMNETModelCV, newx = testMatrix, s = 'lambda.min'))   #it needs to be fixed, since model matrix deletes data, the test matrix ends up being incomplete
 rm(testMatrix)
 #Regression
 testMatrixReg <- model.matrix(~ . , data = test[ , linearRegPredictors])
-GLMNETPredictionReg <- predict(GLMNETModelCVReg, newx = testMatrixReg)   #it needs to be fixed, since model matrix deletes data, the test matrix ends up being incomplete
+GLMNETPredictionReg <- predict(GLMNETModelCVReg, newx = testMatrixReg, s = 'lambda.min')   #it needs to be fixed, since model matrix deletes data, the test matrix ends up being incomplete
 rm(testMatrixReg)
 #All Data
 testMatrixAll <- model.matrix(~ . , data = test[ , linearPredictorsFull])
-GLMNETPredictionAll <- predict(GLMNETModelCVAll, newx = testMatrixAll)   #it needs to be fixed, since model matrix deletes data, the test matrix ends up being incomplete
+GLMNETPredictionAll <- predict(GLMNETModelCVAll, newx = testMatrixAll, s = 'lambda.min')   #it needs to be fixed, since model matrix deletes data, the test matrix ends up being incomplete
 rm(testMatrixAll)
 
 #Classification - Regression
@@ -618,3 +617,19 @@ write.csv(submissionTemplate, file = "finalPredictionXIX.csv", row.names = FALSE
 
 submissionTemplate$target <- testPredictions$ClassReg #5
 write.csv(submissionTemplate, file = "finalPredictionXX.csv", row.names = FALSE)
+
+#--------------------------------------------------------------------------
+submissionTemplate$target <- testPredictions$ClassAllGLMNET #1
+write.csv(submissionTemplate, file = "finalPredictionXXI.csv", row.names = FALSE)
+
+submissionTemplate$target <- testPredictions$GLMNETAll #2
+write.csv(submissionTemplate, file = "finalPredictionXXII.csv", row.names = FALSE)
+
+submissionTemplate$target <- testPredictions$RegGBMAllGLMNET #3
+write.csv(submissionTemplate, file = "finalPredictionXXIII.csv", row.names = FALSE)
+
+submissionTemplate$target <- testPredictions$GBMAll #4
+write.csv(submissionTemplate, file = "finalPredictionXXIV.csv", row.names = FALSE) 
+
+submissionTemplate$target <- testPredictions$ClassReg #5
+write.csv(submissionTemplate, file = "finalPredictionXXV.csv", row.names = FALSE)
